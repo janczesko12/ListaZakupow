@@ -6,6 +6,9 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build APK
@@ -35,3 +38,10 @@ jobs:
         with:
           name: ListaZakupow-release
           path: app/build/outputs/apk/release/*.apk
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: ListaZakupow v${{ github.run_number }}
+          files: app/build/outputs/apk/release/*.apk
+          generate_release_notes: true
