@@ -6,6 +6,7 @@ plugins {
 
 android {
     namespace = "com.example.listazakupow"
+
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -22,25 +23,9 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    val hasReleaseSigning =
-        System.getenv("KEYSTORE_PASSWORD") != null &&
-                System.getenv("KEY_ALIAS") != null &&
-                System.getenv("KEY_PASSWORD") != null
-
-    signingConfigs {
-        if (hasReleaseSigning) {
-            create("release") {
-                storeFile = rootProject.file("listazakupow-release.jks")
-                storePassword = System.getenv("KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("KEY_ALIAS")
-                keyPassword = System.getenv("KEY_PASSWORD")
-            }
-        }
-    }
-
     signingConfigs {
         create("release") {
-            storeFile = file("../listazakupow-release.jks")
+            storeFile = rootProject.file("listazakupow-release.jks")
             storePassword = System.getenv("KEYSTORE_PASSWORD")
             keyAlias = System.getenv("KEY_ALIAS")
             keyPassword = System.getenv("KEY_PASSWORD")
@@ -58,10 +43,12 @@ android {
             )
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+
     buildFeatures {
         compose = true
     }
@@ -73,7 +60,6 @@ dependencies {
     implementation("com.google.firebase:firebase-firestore")
     implementation("io.coil-kt:coil-compose:2.7.0")
 
-
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)
@@ -82,12 +68,14 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+
     testImplementation(libs.junit)
+
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
+
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
-
 }
