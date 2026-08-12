@@ -19,3 +19,5 @@ replay_pid*.log
 
 .idea/
 /app/release/
+
+*.jks
