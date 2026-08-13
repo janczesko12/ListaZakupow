@@ -33,8 +33,11 @@ android {
 
     signingConfigs {
         create("release") {
+
             storeFile =
-                rootProject.file("listazakupow-release.jks")
+                rootProject.file(
+                    "listazakupow-release-new.jks"
+                )
 
             storePassword =
                 System.getenv("KEYSTORE_PASSWORD")
