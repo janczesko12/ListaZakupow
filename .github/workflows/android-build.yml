@@ -22,7 +22,12 @@ jobs:
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
-          echo "$KEYSTORE_BASE64" | base64 --decode > listazakupow-release.jks
+          echo "$KEYSTORE_BASE64" | base64 --decode > listazakupow-release-new.jks
+
+      - name: Verify signing keystore
+        run: |
+          test -f listazakupow-release-new.jks
+          echo "Keystore restored successfully."
 
       - name: Setup JDK
         uses: actions/setup-java@v4
