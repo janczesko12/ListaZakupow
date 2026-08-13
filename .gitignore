@@ -21,3 +21,4 @@ replay_pid*.log
 /app/release/
 
 *.jks
+*.keystore

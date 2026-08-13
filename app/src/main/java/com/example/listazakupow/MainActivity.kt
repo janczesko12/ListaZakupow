@@ -73,6 +73,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Divider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -115,6 +116,70 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
+import java.io.File
+import java.io.IOException
+
+// =============================================================
+// STAN POBIERANIA AKTUALIZACJI
+// =============================================================
+
+private object UpdateDownloadState {
+
+    var isDownloading by mutableStateOf(false)
+
+    var progress by mutableStateOf(0)
+
+    var downloadedBytes by mutableStateOf(0L)
+
+    var totalBytes by mutableStateOf(-1L)
+
+    var status by mutableStateOf("")
+
+    var error by mutableStateOf<String?>(null)
+
+    fun start() {
+        isDownloading = true
+        progress = 0
+        downloadedBytes = 0L
+        totalBytes = -1L
+        status = "Pobieranie aktualizacji..."
+        error = null
+    }
+
+    fun update(
+        downloaded: Long,
+        total: Long
+    ) {
+
+        downloadedBytes = downloaded
+        totalBytes = total
+
+        progress =
+            if (total > 0) {
+                ((downloaded * 100L) / total)
+                    .toInt()
+                    .coerceIn(0, 100)
+            } else {
+                0
+            }
+
+        status =
+            if (total > 0) {
+                "Pobieranie aktualizacji..."
+            } else {
+                "Pobieranie aktualizacji..."
+            }
+    }
+
+    fun preparing() {
+        progress = 100
+        status = "Przygotowywanie instalacji..."
+    }
+
+    fun finish() {
+        isDownloading = false
+    }
+}
 
 
 // =============================================================
@@ -300,27 +365,38 @@ private fun downloadAndInstallUpdate(
     downloadUrl: String
 ) {
     try {
-        val request = DownloadManager.Request(
-            Uri.parse(downloadUrl)
-        )
-            .setTitle("Lista Zakupów — aktualizacja")
-            .setDescription("Pobieranie nowej wersji aplikacji")
-            .setNotificationVisibility(
-                DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
-            )
-            .setDestinationInExternalPublicDir(
-                Environment.DIRECTORY_DOWNLOADS,
-                "ListaZakupow-update.apk"
-            )
-            .setMimeType("application/vnd.android.package-archive")
-            .setAllowedOverMetered(true)
-            .setAllowedOverRoaming(true)
+        val downloadManager =
+            context.getSystemService(
+                Context.DOWNLOAD_SERVICE
+            ) as DownloadManager
 
-        val downloadManager = context.getSystemService(
-            Context.DOWNLOAD_SERVICE
-        ) as DownloadManager
+        UpdateDownloadState.start()
 
-        val downloadId = downloadManager.enqueue(request)
+        val request =
+            DownloadManager.Request(
+                Uri.parse(downloadUrl)
+            )
+                .setTitle(
+                    "Lista Zakupów — aktualizacja"
+                )
+                .setDescription(
+                    "Pobieranie nowej wersji aplikacji"
+                )
+                .setNotificationVisibility(
+                    DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
+                )
+                .setDestinationInExternalPublicDir(
+                    Environment.DIRECTORY_DOWNLOADS,
+                    "ListaZakupow-update.apk"
+                )
+                .setMimeType(
+                    "application/vnd.android.package-archive"
+                )
+                .setAllowedOverMetered(true)
+                .setAllowedOverRoaming(true)
+
+        val downloadId =
+            downloadManager.enqueue(request)
 
         Toast.makeText(
             context,
@@ -328,71 +404,209 @@ private fun downloadAndInstallUpdate(
             Toast.LENGTH_SHORT
         ).show()
 
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(
-                receiverContext: Context,
-                intent: Intent
-            ) {
-                val completedId = intent.getLongExtra(
-                    DownloadManager.EXTRA_DOWNLOAD_ID,
-                    -1L
-                )
+        // Śledzimy pobieranie co 250 ms i aktualizujemy pasek w aplikacji.
+        val handler =
+            android.os.Handler(
+                android.os.Looper.getMainLooper()
+            )
 
-                if (completedId != downloadId) return
+        val progressRunnable =
+            object : Runnable {
 
-                try {
-                    val apkUri = downloadManager.getUriForDownloadedFile(
-                        downloadId
-                    )
+                override fun run() {
+                    try {
+                        val query =
+                            DownloadManager.Query()
+                                .setFilterById(downloadId)
 
-                    if (apkUri == null) {
+                        val cursor =
+                            downloadManager.query(query)
+
+                        cursor.use {
+                            if (!it.moveToFirst()) {
+                                UpdateDownloadState.finish()
+                                Toast.makeText(
+                                    context,
+                                    "Nie znaleziono pobierania.",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                                return
+                            }
+
+                            val status =
+                                it.getInt(
+                                    it.getColumnIndexOrThrow(
+                                        DownloadManager.COLUMN_STATUS
+                                    )
+                                )
+
+                            val downloaded =
+                                it.getLong(
+                                    it.getColumnIndexOrThrow(
+                                        DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR
+                                    )
+                                )
+
+                            val total =
+                                it.getLong(
+                                    it.getColumnIndexOrThrow(
+                                        DownloadManager.COLUMN_TOTAL_SIZE_BYTES
+                                    )
+                                )
+
+                            when (status) {
+                                DownloadManager.STATUS_PENDING,
+                                DownloadManager.STATUS_RUNNING -> {
+                                    UpdateDownloadState.update(
+                                        downloaded = downloaded,
+                                        total = total
+                                    )
+                                    handler.postDelayed(this, 250L)
+                                }
+
+                                DownloadManager.STATUS_SUCCESSFUL -> {
+                                    UpdateDownloadState.update(
+                                        downloaded = downloaded,
+                                        total = total
+                                    )
+                                    UpdateDownloadState.preparing()
+
+                                    handler.post {
+                                        try {
+                                            val downloadedUri =
+                                                downloadManager.getUriForDownloadedFile(downloadId)
+
+                                            if (downloadedUri == null) {
+                                                throw IOException(
+                                                    "Nie udało się odnaleźć pobranego APK."
+                                                )
+                                            }
+
+                                            val apkFile =
+                                                File(
+                                                    context.cacheDir,
+                                                    "ListaZakupow-update.apk"
+                                                )
+
+                                            context.contentResolver
+                                                .openInputStream(downloadedUri)
+                                                ?.use { input ->
+                                                    apkFile.outputStream().use { output ->
+                                                        input.copyTo(output)
+                                                    }
+                                                }
+                                                ?: throw IOException(
+                                                    "Nie można otworzyć pobranego APK."
+                                                )
+
+                                            val apkUri =
+                                                androidx.core.content.FileProvider
+                                                    .getUriForFile(
+                                                        context,
+                                                        "${context.packageName}.fileprovider",
+                                                        apkFile
+                                                    )
+
+                                            val installIntent =
+                                                Intent(Intent.ACTION_VIEW).apply {
+                                                    setDataAndType(
+                                                        apkUri,
+                                                        "application/vnd.android.package-archive"
+                                                    )
+                                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                                    addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                                                    addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                                }
+
+                                            android.util.Log.d(
+                                                "ListaZakupowUpdate",
+                                                "Uruchamiam instalator APK: ${apkFile.absolutePath}"
+                                            )
+
+                                            context.startActivity(installIntent)
+
+                                            handler.postDelayed(
+                                                { UpdateDownloadState.finish() },
+                                                1500L
+                                            )
+
+                                        } catch (e: Exception) {
+                                            android.util.Log.e(
+                                                "ListaZakupowUpdate",
+                                                "Błąd uruchamiania instalatora",
+                                                e
+                                            )
+                                            UpdateDownloadState.finish()
+                                            Toast.makeText(
+                                                context,
+                                                "Nie udało się uruchomić instalatora: ${e.message}",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        }
+                                    }
+                                }
+
+                                DownloadManager.STATUS_FAILED -> {
+                                    val reason =
+                                        it.getInt(
+                                            it.getColumnIndexOrThrow(
+                                                DownloadManager.COLUMN_REASON
+                                            )
+                                        )
+
+                                    android.util.Log.e(
+                                        "ListaZakupowUpdate",
+                                        "Pobieranie APK nieudane. reason=$reason"
+                                    )
+
+                                    UpdateDownloadState.finish()
+                                    Toast.makeText(
+                                        context,
+                                        "Pobieranie aktualizacji nie powiodło się.",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+
+                                DownloadManager.STATUS_PAUSED -> {
+                                    UpdateDownloadState.status =
+                                        "Pobieranie wstrzymane..."
+                                    handler.postDelayed(this, 500L)
+                                }
+
+                                else -> {
+                                    handler.postDelayed(this, 500L)
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e(
+                            "ListaZakupowUpdate",
+                            "Błąd śledzenia pobierania",
+                            e
+                        )
+                        UpdateDownloadState.finish()
                         Toast.makeText(
                             context,
-                            "Nie udało się pobrać aktualizacji.",
+                            "Błąd pobierania aktualizacji: ${e.message}",
                             Toast.LENGTH_LONG
                         ).show()
-                        return
-                    }
-
-                    val installIntent = Intent(
-                        Intent.ACTION_VIEW
-                    ).apply {
-                        setDataAndType(
-                            apkUri,
-                            "application/vnd.android.package-archive"
-                        )
-                        addFlags(
-                            Intent.FLAG_ACTIVITY_NEW_TASK or
-                                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                        )
-                    }
-
-                    context.startActivity(installIntent)
-                } catch (_: Exception) {
-                    Toast.makeText(
-                        context,
-                        "Nie udało się uruchomić instalatora.",
-                        Toast.LENGTH_LONG
-                    ).show()
-                } finally {
-                    try {
-                        receiverContext.unregisterReceiver(this)
-                    } catch (_: Exception) {
                     }
                 }
             }
-        }
 
-        androidx.core.content.ContextCompat.registerReceiver(
-            context,
-            receiver,
-            IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
-            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
+        handler.post(progressRunnable)
+
+    } catch (e: Exception) {
+        UpdateDownloadState.finish()
+        android.util.Log.e(
+            "ListaZakupowUpdate",
+            "Nie udało się rozpocząć pobierania",
+            e
         )
-    } catch (_: Exception) {
         Toast.makeText(
             context,
-            "Nie udało się rozpocząć pobierania aktualizacji.",
+            "Nie udało się rozpocząć aktualizacji: ${e.message}",
             Toast.LENGTH_LONG
         ).show()
     }
@@ -449,6 +663,142 @@ private fun UpdateDialog(
                 Text("PÓŹNIEJ")
             }
         }
+    )
+}
+
+// =============================================================
+// PASEK POBIERANIA AKTUALIZACJI
+// =============================================================
+
+@Composable
+private fun UpdateDownloadBanner() {
+
+    if (!UpdateDownloadState.isDownloading) {
+        return
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                horizontal = 12.dp,
+                vertical = 8.dp
+            ),
+        shape = RoundedCornerShape(18.dp),
+        elevation = CardDefaults.cardElevation(
+            defaultElevation = 6.dp
+        )
+    ) {
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp)
+        ) {
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment =
+                    Alignment.CenterVertically
+            ) {
+
+                Text(
+                    text = "⬇️",
+                    style =
+                        MaterialTheme.typography.titleLarge
+                )
+
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 10.dp)
+                ) {
+
+                    Text(
+                        text =
+                            "Aktualizacja Lista Zakupów",
+                        style =
+                            MaterialTheme.typography.titleMedium
+                    )
+
+                    Text(
+                        text =
+                            UpdateDownloadState.status,
+                        style =
+                            MaterialTheme.typography.bodySmall,
+                        color =
+                            MaterialTheme
+                                .colorScheme
+                                .onSurfaceVariant
+                    )
+                }
+
+                Text(
+                    text =
+                        "${UpdateDownloadState.progress}%",
+                    style =
+                        MaterialTheme.typography.titleMedium
+                )
+            }
+
+            Spacer(
+                modifier =
+                    Modifier.height(8.dp)
+            )
+
+            LinearProgressIndicator(
+                progress = {
+                    UpdateDownloadState.progress / 100f
+                },
+                modifier =
+                    Modifier.fillMaxWidth()
+            )
+
+            Spacer(
+                modifier =
+                    Modifier.height(6.dp)
+            )
+
+            if (
+                UpdateDownloadState.totalBytes > 0
+            ) {
+
+                Text(
+                    text =
+                        "${formatBytes(UpdateDownloadState.downloadedBytes)} / " +
+                                formatBytes(
+                                    UpdateDownloadState.totalBytes
+                                ),
+
+                    style =
+                        MaterialTheme.typography.bodySmall,
+
+                    color =
+                        MaterialTheme
+                            .colorScheme
+                            .onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+private fun formatBytes(
+    bytes: Long
+): String {
+
+    if (bytes < 1024) {
+        return "$bytes B"
+    }
+
+    if (bytes < 1024 * 1024) {
+        return "%.1f KB".format(
+            bytes / 1024.0
+        )
+    }
+
+    return "%.1f MB".format(
+        bytes / (1024.0 * 1024.0)
     )
 }
 
@@ -1778,7 +2128,21 @@ fun LoginScreen(
             Modifier.fillMaxSize()
     ) {
 
+        // Pasek pobierania jest widoczny na górze całej aplikacji.
+        UpdateDownloadBanner()
+
         AnimatedContent(
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .padding(
+                        top =
+                            if (UpdateDownloadState.isDownloading) {
+                                96.dp
+                            } else {
+                                0.dp
+                            }
+                    ),
 
             targetState =
                 wybranaZakladka,
@@ -7119,7 +7483,7 @@ fun UstawieniaScreen(
                                     release
                             } else {
                                 komunikatAktualizacji =
-                                    "✅ Aplikacja jest aktualna • ${BuildConfig.VERSION_NAME}"
+                                    "✅ Aplikacja jest aktualna (${BuildConfig.VERSION_NAME})"
                             }
                         }
                     }
@@ -7128,7 +7492,7 @@ fun UstawieniaScreen(
         }
 
         SettingsSectionTitle(
-            "📱 Dodatkowe Ustawienia"
+            "📱 Dodatkowe"
         )
 
 
