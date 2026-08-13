@@ -20,7 +20,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.ContextCompat
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
@@ -61,6 +60,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -74,7 +74,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Divider
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -103,6 +102,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.listazakupow.components.UserHeader
 import com.example.listazakupow.ui.theme.ListaZakupowTheme
@@ -117,70 +117,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
-import java.io.File
-import java.io.IOException
-
-// =============================================================
-// STAN POBIERANIA AKTUALIZACJI
-// =============================================================
-
-private object UpdateDownloadState {
-
-    var isDownloading by mutableStateOf(false)
-
-    var progress by mutableStateOf(0)
-
-    var downloadedBytes by mutableStateOf(0L)
-
-    var totalBytes by mutableStateOf(-1L)
-
-    var status by mutableStateOf("")
-
-    var error by mutableStateOf<String?>(null)
-
-    fun start() {
-        isDownloading = true
-        progress = 0
-        downloadedBytes = 0L
-        totalBytes = -1L
-        status = "Pobieranie aktualizacji..."
-        error = null
-    }
-
-    fun update(
-        downloaded: Long,
-        total: Long
-    ) {
-
-        downloadedBytes = downloaded
-        totalBytes = total
-
-        progress =
-            if (total > 0) {
-                ((downloaded * 100L) / total)
-                    .toInt()
-                    .coerceIn(0, 100)
-            } else {
-                0
-            }
-
-        status =
-            if (total > 0) {
-                "Pobieranie aktualizacji..."
-            } else {
-                "Pobieranie aktualizacji..."
-            }
-    }
-
-    fun preparing() {
-        progress = 100
-        status = "Przygotowywanie instalacji..."
-    }
-
-    fun finish() {
-        isDownloading = false
-    }
-}
 
 
 // =============================================================
@@ -212,39 +148,24 @@ private fun checkGitHubLatestRelease(
         var connection: HttpURLConnection? = null
 
         try {
-            android.util.Log.d(
-                "ListaZakupowUpdate",
-                "Rozpoczynam sprawdzanie aktualizacji..."
-            )
-
             val url = URL(
                 "https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/releases/latest"
             )
 
             connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
-            connection.connectTimeout = 5_000
-            connection.readTimeout = 5_000
-            connection.useCaches = false
-
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 10_000
             connection.setRequestProperty(
                 "Accept",
                 "application/vnd.github+json"
             )
-
             connection.setRequestProperty(
                 "User-Agent",
                 "ListaZakupow-Android"
             )
 
-            val responseCode = connection.responseCode
-
-            android.util.Log.d(
-                "ListaZakupowUpdate",
-                "GitHub HTTP: $responseCode"
-            )
-
-            if (responseCode !in 200..299) {
+            if (connection.responseCode !in 200..299) {
                 onResult(null)
                 return@Thread
             }
@@ -253,34 +174,15 @@ private fun checkGitHubLatestRelease(
                 .bufferedReader()
                 .use { it.readText() }
 
-            android.util.Log.d(
-                "ListaZakupowUpdate",
-                "Odpowiedź GitHub otrzymana"
-            )
-
             val tagName = Regex(
                 """"tag_name"\s*:\s*"([^"]+)"""
-            ).find(response)
-                ?.groupValues
-                ?.getOrNull(1)
+            ).find(response)?.groupValues?.getOrNull(1)
 
-            android.util.Log.d(
-                "ListaZakupowUpdate",
-                "tag_name = $tagName"
-            )
-
-            if (tagName.isNullOrBlank()) {
-                onResult(null)
-                return@Thread
+            val versionCode = tagName?.let {
+                extractReleaseVersion(it)
             }
 
-            val versionCode = extractReleaseVersion(tagName)
-
             if (versionCode == null) {
-                android.util.Log.e(
-                    "ListaZakupowUpdate",
-                    "Nie udało się odczytać numeru wersji z: $tagName"
-                )
                 onResult(null)
                 return@Thread
             }
@@ -290,24 +192,7 @@ private fun checkGitHubLatestRelease(
             val apkDownloadUrl = Regex(
                 """"browser_download_url"\s*:\s*"([^"]+\.apk)""",
                 RegexOption.IGNORE_CASE
-            ).find(response)
-                ?.groupValues
-                ?.getOrNull(1)
-
-            android.util.Log.d(
-                "ListaZakupowUpdate",
-                "GitHub versionCode = $versionCode"
-            )
-
-            android.util.Log.d(
-                "ListaZakupowUpdate",
-                "GitHub versionName = $versionName"
-            )
-
-            android.util.Log.d(
-                "ListaZakupowUpdate",
-                "APK = $apkDownloadUrl"
-            )
+            ).find(response)?.groupValues?.getOrNull(1)
 
             onResult(
                 GitHubRelease(
@@ -316,22 +201,12 @@ private fun checkGitHubLatestRelease(
                     downloadUrl = apkDownloadUrl
                 )
             )
-
-        } catch (e: Exception) {
-            android.util.Log.e(
-                "ListaZakupowUpdate",
-                "Błąd sprawdzania aktualizacji",
-                e
-            )
+        } catch (_: Exception) {
             onResult(null)
-
         } finally {
-            try {
-                connection?.disconnect()
-            } catch (_: Exception) {
-            }
+            connection?.disconnect()
         }
-    }.start()
+    }
 }
 
 private fun shouldCheckForUpdate(context: Context): Boolean {
@@ -366,38 +241,27 @@ private fun downloadAndInstallUpdate(
     downloadUrl: String
 ) {
     try {
-        val downloadManager =
-            context.getSystemService(
-                Context.DOWNLOAD_SERVICE
-            ) as DownloadManager
-
-        UpdateDownloadState.start()
-
-        val request =
-            DownloadManager.Request(
-                Uri.parse(downloadUrl)
+        val request = DownloadManager.Request(
+            Uri.parse(downloadUrl)
+        )
+            .setTitle("Lista Zakupów — aktualizacja")
+            .setDescription("Pobieranie nowej wersji aplikacji")
+            .setNotificationVisibility(
+                DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
             )
-                .setTitle(
-                    "Lista Zakupów — aktualizacja"
-                )
-                .setDescription(
-                    "Pobieranie nowej wersji aplikacji"
-                )
-                .setNotificationVisibility(
-                    DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
-                )
-                .setDestinationInExternalPublicDir(
-                    Environment.DIRECTORY_DOWNLOADS,
-                    "ListaZakupow-update.apk"
-                )
-                .setMimeType(
-                    "application/vnd.android.package-archive"
-                )
-                .setAllowedOverMetered(true)
-                .setAllowedOverRoaming(true)
+            .setDestinationInExternalPublicDir(
+                Environment.DIRECTORY_DOWNLOADS,
+                "ListaZakupow-update.apk"
+            )
+            .setMimeType("application/vnd.android.package-archive")
+            .setAllowedOverMetered(true)
+            .setAllowedOverRoaming(true)
 
-        val downloadId =
-            downloadManager.enqueue(request)
+        val downloadManager = context.getSystemService(
+            Context.DOWNLOAD_SERVICE
+        ) as DownloadManager
+
+        val downloadId = downloadManager.enqueue(request)
 
         Toast.makeText(
             context,
@@ -405,209 +269,71 @@ private fun downloadAndInstallUpdate(
             Toast.LENGTH_SHORT
         ).show()
 
-        // Śledzimy pobieranie co 250 ms i aktualizujemy pasek w aplikacji.
-        val handler =
-            android.os.Handler(
-                android.os.Looper.getMainLooper()
-            )
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(
+                receiverContext: Context,
+                intent: Intent
+            ) {
+                val completedId = intent.getLongExtra(
+                    DownloadManager.EXTRA_DOWNLOAD_ID,
+                    -1L
+                )
 
-        val progressRunnable =
-            object : Runnable {
+                if (completedId != downloadId) return
 
-                override fun run() {
-                    try {
-                        val query =
-                            DownloadManager.Query()
-                                .setFilterById(downloadId)
+                try {
+                    val apkUri = downloadManager.getUriForDownloadedFile(
+                        downloadId
+                    )
 
-                        val cursor =
-                            downloadManager.query(query)
-
-                        cursor.use {
-                            if (!it.moveToFirst()) {
-                                UpdateDownloadState.finish()
-                                Toast.makeText(
-                                    context,
-                                    "Nie znaleziono pobierania.",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                                return
-                            }
-
-                            val status =
-                                it.getInt(
-                                    it.getColumnIndexOrThrow(
-                                        DownloadManager.COLUMN_STATUS
-                                    )
-                                )
-
-                            val downloaded =
-                                it.getLong(
-                                    it.getColumnIndexOrThrow(
-                                        DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR
-                                    )
-                                )
-
-                            val total =
-                                it.getLong(
-                                    it.getColumnIndexOrThrow(
-                                        DownloadManager.COLUMN_TOTAL_SIZE_BYTES
-                                    )
-                                )
-
-                            when (status) {
-                                DownloadManager.STATUS_PENDING,
-                                DownloadManager.STATUS_RUNNING -> {
-                                    UpdateDownloadState.update(
-                                        downloaded = downloaded,
-                                        total = total
-                                    )
-                                    handler.postDelayed(this, 250L)
-                                }
-
-                                DownloadManager.STATUS_SUCCESSFUL -> {
-                                    UpdateDownloadState.update(
-                                        downloaded = downloaded,
-                                        total = total
-                                    )
-                                    UpdateDownloadState.preparing()
-
-                                    handler.post {
-                                        try {
-                                            val downloadedUri =
-                                                downloadManager.getUriForDownloadedFile(downloadId)
-
-                                            if (downloadedUri == null) {
-                                                throw IOException(
-                                                    "Nie udało się odnaleźć pobranego APK."
-                                                )
-                                            }
-
-                                            val apkFile =
-                                                File(
-                                                    context.cacheDir,
-                                                    "ListaZakupow-update.apk"
-                                                )
-
-                                            context.contentResolver
-                                                .openInputStream(downloadedUri)
-                                                ?.use { input ->
-                                                    apkFile.outputStream().use { output ->
-                                                        input.copyTo(output)
-                                                    }
-                                                }
-                                                ?: throw IOException(
-                                                    "Nie można otworzyć pobranego APK."
-                                                )
-
-                                            val apkUri =
-                                                androidx.core.content.FileProvider
-                                                    .getUriForFile(
-                                                        context,
-                                                        "${context.packageName}.fileprovider",
-                                                        apkFile
-                                                    )
-
-                                            val installIntent =
-                                                Intent(Intent.ACTION_VIEW).apply {
-                                                    setDataAndType(
-                                                        apkUri,
-                                                        "application/vnd.android.package-archive"
-                                                    )
-                                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                                    addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-                                                    addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                                                }
-
-                                            android.util.Log.d(
-                                                "ListaZakupowUpdate",
-                                                "Uruchamiam instalator APK: ${apkFile.absolutePath}"
-                                            )
-
-                                            context.startActivity(installIntent)
-
-                                            handler.postDelayed(
-                                                { UpdateDownloadState.finish() },
-                                                1500L
-                                            )
-
-                                        } catch (e: Exception) {
-                                            android.util.Log.e(
-                                                "ListaZakupowUpdate",
-                                                "Błąd uruchamiania instalatora",
-                                                e
-                                            )
-                                            UpdateDownloadState.finish()
-                                            Toast.makeText(
-                                                context,
-                                                "Nie udało się uruchomić instalatora: ${e.message}",
-                                                Toast.LENGTH_LONG
-                                            ).show()
-                                        }
-                                    }
-                                }
-
-                                DownloadManager.STATUS_FAILED -> {
-                                    val reason =
-                                        it.getInt(
-                                            it.getColumnIndexOrThrow(
-                                                DownloadManager.COLUMN_REASON
-                                            )
-                                        )
-
-                                    android.util.Log.e(
-                                        "ListaZakupowUpdate",
-                                        "Pobieranie APK nieudane. reason=$reason"
-                                    )
-
-                                    UpdateDownloadState.finish()
-                                    Toast.makeText(
-                                        context,
-                                        "Pobieranie aktualizacji nie powiodło się.",
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                }
-
-                                DownloadManager.STATUS_PAUSED -> {
-                                    UpdateDownloadState.status =
-                                        "Pobieranie wstrzymane..."
-                                    handler.postDelayed(this, 500L)
-                                }
-
-                                else -> {
-                                    handler.postDelayed(this, 500L)
-                                }
-                            }
-                        }
-                    } catch (e: Exception) {
-                        android.util.Log.e(
-                            "ListaZakupowUpdate",
-                            "Błąd śledzenia pobierania",
-                            e
-                        )
-                        UpdateDownloadState.finish()
+                    if (apkUri == null) {
                         Toast.makeText(
                             context,
-                            "Błąd pobierania aktualizacji: ${e.message}",
+                            "Nie udało się pobrać aktualizacji.",
                             Toast.LENGTH_LONG
                         ).show()
+                        return
+                    }
+
+                    val installIntent = Intent(
+                        Intent.ACTION_VIEW
+                    ).apply {
+                        setDataAndType(
+                            apkUri,
+                            "application/vnd.android.package-archive"
+                        )
+                        addFlags(
+                            Intent.FLAG_ACTIVITY_NEW_TASK or
+                                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        )
+                    }
+
+                    context.startActivity(installIntent)
+                } catch (_: Exception) {
+                    Toast.makeText(
+                        context,
+                        "Nie udało się uruchomić instalatora.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                } finally {
+                    try {
+                        receiverContext.unregisterReceiver(this)
+                    } catch (_: Exception) {
                     }
                 }
             }
+        }
 
-        handler.post(progressRunnable)
-
-    } catch (e: Exception) {
-        UpdateDownloadState.finish()
-        android.util.Log.e(
-            "ListaZakupowUpdate",
-            "Nie udało się rozpocząć pobierania",
-            e
+        androidx.core.content.ContextCompat.registerReceiver(
+            context,
+            receiver,
+            IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
         )
+    } catch (_: Exception) {
         Toast.makeText(
             context,
-            "Nie udało się rozpocząć aktualizacji: ${e.message}",
+            "Nie udało się rozpocząć pobierania aktualizacji.",
             Toast.LENGTH_LONG
         ).show()
     }
@@ -664,142 +390,6 @@ private fun UpdateDialog(
                 Text("PÓŹNIEJ")
             }
         }
-    )
-}
-
-// =============================================================
-// PASEK POBIERANIA AKTUALIZACJI
-// =============================================================
-
-@Composable
-private fun UpdateDownloadBanner() {
-
-    if (!UpdateDownloadState.isDownloading) {
-        return
-    }
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(
-                horizontal = 12.dp,
-                vertical = 8.dp
-            ),
-        shape = RoundedCornerShape(18.dp),
-        elevation = CardDefaults.cardElevation(
-            defaultElevation = 6.dp
-        )
-    ) {
-
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp)
-        ) {
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment =
-                    Alignment.CenterVertically
-            ) {
-
-                Text(
-                    text = "⬇️",
-                    style =
-                        MaterialTheme.typography.titleLarge
-                )
-
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(start = 10.dp)
-                ) {
-
-                    Text(
-                        text =
-                            "Aktualizacja Lista Zakupów",
-                        style =
-                            MaterialTheme.typography.titleMedium
-                    )
-
-                    Text(
-                        text =
-                            UpdateDownloadState.status,
-                        style =
-                            MaterialTheme.typography.bodySmall,
-                        color =
-                            MaterialTheme
-                                .colorScheme
-                                .onSurfaceVariant
-                    )
-                }
-
-                Text(
-                    text =
-                        "${UpdateDownloadState.progress}%",
-                    style =
-                        MaterialTheme.typography.titleMedium
-                )
-            }
-
-            Spacer(
-                modifier =
-                    Modifier.height(8.dp)
-            )
-
-            LinearProgressIndicator(
-                progress = {
-                    UpdateDownloadState.progress / 100f
-                },
-                modifier =
-                    Modifier.fillMaxWidth()
-            )
-
-            Spacer(
-                modifier =
-                    Modifier.height(6.dp)
-            )
-
-            if (
-                UpdateDownloadState.totalBytes > 0
-            ) {
-
-                Text(
-                    text =
-                        "${formatBytes(UpdateDownloadState.downloadedBytes)} / " +
-                                formatBytes(
-                                    UpdateDownloadState.totalBytes
-                                ),
-
-                    style =
-                        MaterialTheme.typography.bodySmall,
-
-                    color =
-                        MaterialTheme
-                            .colorScheme
-                            .onSurfaceVariant
-                )
-            }
-        }
-    }
-}
-
-private fun formatBytes(
-    bytes: Long
-): String {
-
-    if (bytes < 1024) {
-        return "$bytes B"
-    }
-
-    if (bytes < 1024 * 1024) {
-        return "%.1f KB".format(
-            bytes / 1024.0
-        )
-    }
-
-    return "%.1f MB".format(
-        bytes / (1024.0 * 1024.0)
     )
 }
 
@@ -1074,83 +664,6 @@ fun imageUriToBase64(
         )
 
     } catch (e: Exception) {
-
-        null
-    }
-}
-
-
-// =============================================================
-// BITMAP -> BASE64
-// =============================================================
-
-fun bitmapToBase64(
-    bitmap: Bitmap
-): String? {
-
-    return try {
-
-        val maxSize =
-            256
-
-        val ratio =
-            minOf(
-                maxSize.toFloat() /
-                        bitmap.width,
-
-                maxSize.toFloat() /
-                        bitmap.height,
-
-                1f
-            )
-
-        val width =
-            (
-                    bitmap.width *
-                            ratio
-                    )
-                .toInt()
-                .coerceAtLeast(1)
-
-        val height =
-            (
-                    bitmap.height *
-                            ratio
-                    )
-                .toInt()
-                .coerceAtLeast(1)
-
-        val resized =
-            Bitmap.createScaledBitmap(
-                bitmap,
-                width,
-                height,
-                true
-            )
-
-        val output =
-            ByteArrayOutputStream()
-
-        resized.compress(
-            Bitmap.CompressFormat.JPEG,
-            65,
-            output
-        )
-
-        if (
-            resized !== bitmap
-        ) {
-            resized.recycle()
-        }
-
-        Base64.encodeToString(
-            output.toByteArray(),
-            Base64.NO_WRAP
-        )
-
-    } catch (
-        e: Exception
-    ) {
 
         null
     }
@@ -1433,6 +946,10 @@ fun LoginScreen(
 
     var pokazWyborListy by remember {
         mutableStateOf(false)
+    }
+
+    var produktDoPrzydzielenia by remember {
+        mutableStateOf<Produkt?>(null)
     }
 
     // Aktualny profil użytkownika z Firestore.
@@ -2206,21 +1723,7 @@ fun LoginScreen(
             Modifier.fillMaxSize()
     ) {
 
-        // Pasek pobierania jest widoczny na górze całej aplikacji.
-        UpdateDownloadBanner()
-
         AnimatedContent(
-            modifier =
-                Modifier
-                    .fillMaxSize()
-                    .padding(
-                        top =
-                            if (UpdateDownloadState.isDownloading) {
-                                96.dp
-                            } else {
-                                0.dp
-                            }
-                    ),
 
             targetState =
                 wybranaZakladka,
@@ -2423,14 +1926,44 @@ fun LoginScreen(
 
                                 onClick = {
 
+                                    val produkt =
+                                        nowyProdukt.trim()
+
                                     if (
-                                        nowyProdukt
-                                            .trim()
-                                            .isNotEmpty()
+                                        produkt.isNotEmpty()
                                     ) {
 
-                                        pokazWyborListy =
-                                            true
+                                        if (
+                                            wybranaKategoria !=
+                                            "wszystkie"
+                                        ) {
+
+                                            // Jesteśmy już w konkretnej
+                                            // liście/sklepie — dodajemy
+                                            // bez pytania.
+                                            dodajProduktDoListy(
+                                                produkt,
+                                                imie,
+                                                wybranaKategoria
+                                            )
+
+                                            nowyProdukt =
+                                                ""
+
+                                            scope.launch {
+                                                snackbarHostState
+                                                    .showSnackbar(
+                                                        "✅ Dodano do wybranej listy"
+                                                    )
+                                            }
+
+                                        } else {
+
+                                            // W widoku "Wszystkie" użytkownik
+                                            // nadal wybiera docelową listę.
+                                            pokazWyborListy =
+                                                true
+                                        }
                                     }
                                 },
 
@@ -2887,6 +2420,157 @@ fun LoginScreen(
 
 
                         // =================================================
+                        // PRZYDZIELENIE PRODUKTU DO SKLEPU
+                        // =================================================
+
+                        produktDoPrzydzielenia?.let { produkt ->
+
+                            AlertDialog(
+
+                                onDismissRequest = {
+                                    produktDoPrzydzielenia =
+                                        null
+                                },
+
+                                title = {
+                                    Text(
+                                        "🏪 Przydziel do sklepu"
+                                    )
+                                },
+
+                                text = {
+
+                                    Column(
+                                        verticalArrangement =
+                                            Arrangement.spacedBy(
+                                                8.dp
+                                            )
+                                    ) {
+
+                                        Text(
+                                            text =
+                                                produkt.nazwa,
+
+                                            style =
+                                                MaterialTheme
+                                                    .typography
+                                                    .bodyMedium,
+
+                                            softWrap =
+                                                true,
+
+                                            maxLines =
+                                                3,
+
+                                            overflow =
+                                                androidx.compose.ui.text.style.TextOverflow.Clip
+                                        )
+
+                                        Spacer(
+                                            modifier =
+                                                Modifier.height(
+                                                    4.dp
+                                                )
+                                        )
+
+                                        sklepy
+                                            .sortedBy {
+                                                it.kolejnosc
+                                            }
+                                            .forEach { sklep ->
+
+                                                ListaWyboruButton(
+                                                    emoji =
+                                                        sklep.emoji,
+
+                                                    nazwa =
+                                                        sklep.nazwa,
+
+                                                    sklep =
+                                                        sklep,
+
+                                                    onClick = {
+
+                                                        FirebaseFirestore
+                                                            .getInstance()
+                                                            .collection(
+                                                                "zakupy"
+                                                            )
+                                                            .document(
+                                                                produkt.id
+                                                            )
+                                                            .update(
+                                                                "kategoria",
+                                                                sklep.id
+                                                            )
+
+                                                        produktDoPrzydzielenia =
+                                                            null
+
+                                                        scope.launch {
+                                                            snackbarHostState
+                                                                .showSnackbar(
+                                                                    "✅ Przydzielono do ${sklep.nazwa}"
+                                                                )
+                                                        }
+                                                    }
+                                                )
+                                            }
+
+                                        TextButton(
+                                            onClick = {
+
+                                                FirebaseFirestore
+                                                    .getInstance()
+                                                    .collection(
+                                                        "zakupy"
+                                                    )
+                                                    .document(
+                                                        produkt.id
+                                                    )
+                                                    .update(
+                                                        "kategoria",
+                                                        "glowna"
+                                                    )
+
+                                                produktDoPrzydzielenia =
+                                                    null
+
+                                                scope.launch {
+                                                    snackbarHostState
+                                                        .showSnackbar(
+                                                            "✅ Produkt nie należy do żadnego sklepu"
+                                                        )
+                                                }
+                                            }
+                                        ) {
+                                            Text(
+                                                "🏠 Żadna"
+                                            )
+                                        }
+                                    }
+                                },
+
+                                confirmButton = {},
+
+                                dismissButton = {
+
+                                    TextButton(
+                                        onClick = {
+                                            produktDoPrzydzielenia =
+                                                null
+                                        }
+                                    ) {
+                                        Text(
+                                            "ANULUJ"
+                                        )
+                                    }
+                                }
+                            )
+                        }
+
+
+                        // =================================================
                         // EDYCJA PRODUKTU
                         // =================================================
 
@@ -3088,81 +2772,6 @@ fun LoginScreen(
 
 
                         // =================================================
-                        // USUWANIE PRODUKTU
-                        // =================================================
-
-                        produktDoUsuniecia?.let { produkt ->
-
-                            AlertDialog(
-
-                                onDismissRequest = {
-
-                                    produktDoUsuniecia =
-                                        null
-                                },
-
-                                title = {
-
-                                    Text(
-                                        "Usunąć produkt?"
-                                    )
-                                },
-
-                                text = {
-
-                                    Text(
-                                        produkt.nazwa
-                                    )
-                                },
-
-                                confirmButton = {
-
-                                    TextButton(
-
-                                        onClick = {
-
-                                            db.collection(
-                                                "zakupy"
-                                            )
-                                                .document(
-                                                    produkt.id
-                                                )
-                                                .delete()
-
-                                            produktDoUsuniecia =
-                                                null
-                                        }
-                                    ) {
-
-                                        Text(
-                                            "USUŃ",
-                                            color =
-                                                Color.Red
-                                        )
-                                    }
-                                },
-
-                                dismissButton = {
-
-                                    TextButton(
-
-                                        onClick = {
-
-                                            produktDoUsuniecia =
-                                                null
-                                        }
-                                    ) {
-
-                                        Text(
-                                            "ANULUJ"
-                                        )
-                                    }
-                                }
-                            )
-                        }
-
-
-                        // =================================================
                         // PRODUKTY
                         // =================================================
 
@@ -3294,6 +2903,16 @@ fun LoginScreen(
                                             produkt ->
 
                                         produktDoEdycji =
+                                            produkt
+                                    },
+
+                                    sklepy =
+                                        sklepy,
+
+                                    onAssignProduct = {
+                                            produkt ->
+
+                                        produktDoPrzydzielenia =
                                             produkt
                                     }
                                 )
@@ -3524,10 +3143,34 @@ fun LoginScreen(
                             lista =
                                 lista,
 
+                            imie =
+                                imie,
+
                             onBack = {
 
                                 wybranySklep =
                                     null
+                            },
+
+                            onDeleteProduct = {
+                                    produkt ->
+
+                                produktDoUsuniecia =
+                                    produkt
+                            },
+
+                            onEditProduct = {
+                                    produkt ->
+
+                                produktDoEdycji =
+                                    produkt
+                            },
+
+                            onAssignProduct = {
+                                    produkt ->
+
+                                produktDoPrzydzielenia =
+                                    produkt
                             }
                         )
                     }
@@ -3752,6 +3395,87 @@ fun LoginScreen(
 
 
         }
+
+        // =====================================================
+        // GLOBALNE POTWIERDZENIE USUNIĘCIA PRODUKTU
+        // Działa zarówno w zakładce Lista, jak i wewnątrz
+        // konkretnego sklepu (np. Lidl / Rossmann).
+        // =====================================================
+
+        produktDoUsuniecia?.let { produkt ->
+
+            AlertDialog(
+
+                onDismissRequest = {
+                    produktDoUsuniecia =
+                        null
+                },
+
+                title = {
+                    Text(
+                        "🗑️ Usunąć produkt?"
+                    )
+                },
+
+                text = {
+                    Text(
+                        produkt.nazwa
+                    )
+                },
+
+                confirmButton = {
+
+                    TextButton(
+
+                        onClick = {
+
+                            db.collection(
+                                "zakupy"
+                            )
+                                .document(
+                                    produkt.id
+                                )
+                                .delete()
+
+                            produktDoUsuniecia =
+                                null
+
+                            scope.launch {
+                                snackbarHostState
+                                    .showSnackbar(
+                                        "🗑️ Usunięto ${produkt.nazwa}"
+                                    )
+                            }
+                        }
+                    ) {
+
+                        Text(
+                            "USUŃ",
+                            color =
+                                Color.Red
+                        )
+                    }
+                },
+
+                dismissButton = {
+
+                    TextButton(
+
+                        onClick = {
+
+                            produktDoUsuniecia =
+                                null
+                        }
+                    ) {
+
+                        Text(
+                            "ANULUJ"
+                        )
+                    }
+                }
+            )
+        }
+
 
         // =====================================================
         // DOLNA NAWIGACJA — 3.5
@@ -4047,7 +3771,13 @@ fun ProductDragList(
         (Produkt) -> Unit,
 
     onEditProduct:
-        (Produkt) -> Unit
+        (Produkt) -> Unit,
+
+    sklepy:
+    List<Sklep> = emptyList(),
+
+    onAssignProduct:
+    ((Produkt) -> Unit)? = null
 ) {
 
     val listState =
@@ -4564,7 +4294,19 @@ fun ProductDragList(
                                     onDeleteProduct,
 
                                 onEditProduct =
-                                    onEditProduct
+                                    onEditProduct,
+
+                                sklepNazwa =
+                                    sklepy.find {
+                                        it.id ==
+                                                produkt.kategoria
+                                    }?.nazwa,
+
+                                onAssignProduct = { produktDoPrzydzielenia ->
+                                    onAssignProduct?.invoke(
+                                        produktDoPrzydzielenia
+                                    )
+                                }
                             )
                         }
                     }
@@ -5265,33 +5007,25 @@ fun SklepCardContent(
                     )
         ) {
 
-            Row(
+            Text(
 
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(
-                            rememberScrollState()
-                        )
-            ) {
+                text =
+                    sklep.nazwa,
 
-                Text(
+                style =
+                    MaterialTheme
+                        .typography
+                        .titleMedium,
 
-                    text =
-                        sklep.nazwa,
+                softWrap =
+                    true,
 
-                    style =
-                        MaterialTheme
-                            .typography
-                            .titleMedium,
+                maxLines =
+                    3,
 
-                    maxLines =
-                        1,
-
-                    softWrap =
-                        false
-                )
-            }
+                overflow =
+                    androidx.compose.ui.text.style.TextOverflow.Clip
+            )
 
 
             Text(
@@ -5620,9 +5354,27 @@ fun ListaSklepuScreen(
     lista:
     List<Produkt>,
 
+    imie:
+    String,
+
     onBack:
-        () -> Unit
+        () -> Unit,
+
+    onDeleteProduct:
+        (Produkt) -> Unit,
+
+    onEditProduct:
+        (Produkt) -> Unit,
+
+    onAssignProduct:
+        (Produkt) -> Unit
 ) {
+
+    var nowyProduktSklepu by remember(
+        sklepId
+    ) {
+        mutableStateOf("")
+    }
 
     val produktySklepu =
         lista
@@ -5696,14 +5448,25 @@ fun ListaSklepuScreen(
                         ?: sklepId,
 
                 modifier =
-                    Modifier.padding(
-                        start = 10.dp
-                    ),
+                    Modifier
+                        .weight(1f)
+                        .padding(
+                            start = 10.dp
+                        ),
 
                 style =
                     MaterialTheme
                         .typography
-                        .headlineSmall
+                        .headlineSmall,
+
+                softWrap =
+                    true,
+
+                maxLines =
+                    2,
+
+                overflow =
+                    androidx.compose.ui.text.style.TextOverflow.Clip
             )
         }
 
@@ -5712,6 +5475,107 @@ fun ListaSklepuScreen(
             modifier =
                 Modifier.height(
                     16.dp
+                )
+        )
+
+
+        // =========================================================
+        // DODAWANIE PRODUKTU BEZPOŚREDNIO DO TEGO SKLEPU
+        // =========================================================
+
+        Row(
+            modifier =
+                Modifier.fillMaxWidth(),
+
+            verticalAlignment =
+                Alignment.CenterVertically
+        ) {
+
+            OutlinedTextField(
+
+                value =
+                    nowyProduktSklepu,
+
+                onValueChange = {
+                    nowyProduktSklepu =
+                        it
+                },
+
+                modifier =
+                    Modifier
+                        .weight(1f)
+                        .height(58.dp),
+
+                label = {
+                    Text(
+                        "🛍️ Produkt"
+                    )
+                },
+
+                singleLine =
+                    true,
+
+                shape =
+                    RoundedCornerShape(
+                        18.dp
+                    )
+            )
+
+            Spacer(
+                modifier =
+                    Modifier.width(
+                        8.dp
+                    )
+            )
+
+            Button(
+
+                modifier =
+                    Modifier.height(
+                        58.dp
+                    ),
+
+                shape =
+                    RoundedCornerShape(
+                        18.dp
+                    ),
+
+                onClick = {
+
+                    val produkt =
+                        nowyProduktSklepu.trim()
+
+                    if (
+                        produkt.isNotEmpty()
+                    ) {
+
+                        dodajProduktDoListy(
+                            produkt,
+                            imie,
+                            sklepId
+                        )
+
+                        nowyProduktSklepu =
+                            ""
+                    }
+                },
+
+                contentPadding =
+                    androidx.compose.foundation.layout.PaddingValues(
+                        horizontal = 16.dp
+                    )
+            ) {
+                Text(
+                    "＋"
+                )
+            }
+        }
+
+
+        Spacer(
+            modifier =
+                Modifier.height(
+                    12.dp
                 )
         )
 
@@ -5773,124 +5637,76 @@ fun ListaSklepuScreen(
                             )
                     ) {
 
-                        Row(
+                        ProductCardContent(
 
-                            modifier =
-                                Modifier
-                                    .fillMaxWidth()
-                                    .padding(
-                                        12.dp
-                                    ),
+                            produkt =
+                                produkt,
 
-                            verticalAlignment =
-                                Alignment.CenterVertically
-                        ) {
+                            onToggleProduct = {
+                                    p,
+                                    checked ->
 
-                            Checkbox(
+                                val now =
 
-                                checked =
-                                    produkt.kupione,
+                                    if (
+                                        checked
+                                    ) {
 
-                                onCheckedChange = {
-                                        checked ->
+                                        System
+                                            .currentTimeMillis()
 
-                                    val now =
+                                    } else {
 
-                                        if (
-                                            checked
-                                        ) {
+                                        0L
+                                    }
 
-                                            System
-                                                .currentTimeMillis()
+                                p.kupione =
+                                    checked
 
-                                        } else {
+                                p.kupioneOd =
+                                    now
 
-                                            0L
-                                        }
+                                FirebaseFirestore
+                                    .getInstance()
+                                    .collection(
+                                        "zakupy"
+                                    )
+                                    .document(
+                                        p.id
+                                    )
+                                    .update(
 
-                                    FirebaseFirestore
-                                        .getInstance()
-                                        .collection(
-                                            "zakupy"
+                                        mapOf(
+
+                                            "kupione" to
+                                                    checked,
+
+                                            "kupioneOd" to
+                                                    now
                                         )
-                                        .document(
-                                            produkt.id
-                                        )
-                                        .update(
+                                    )
+                            },
 
-                                            mapOf(
+                            onDeleteProduct =
+                                onDeleteProduct,
 
-                                                "kupione" to
-                                                        checked,
+                            onEditProduct =
+                                onEditProduct,
 
-                                                "kupioneOd" to
-                                                        now
-                                            )
-                                        )
-                                }
-                            )
+                            sklepNazwa =
+                                sklep?.nazwa
+                                    ?: sklepId,
 
-
-                            Column(
-
-                                modifier =
-                                    Modifier
-                                        .weight(1f)
-                                        .padding(
-                                            start = 8.dp
-                                        )
-                            ) {
-
-                                Text(
-
-                                    text =
-                                        produkt.nazwa,
-
-                                    style =
-                                        MaterialTheme
-                                            .typography
-                                            .bodyLarge,
-
-                                    textDecoration =
-
-                                        if (
-                                            produkt.kupione
-                                        ) {
-
-                                            TextDecoration
-                                                .LineThrough
-
-                                        } else {
-
-                                            TextDecoration
-                                                .None
-                                        }
-                                )
-
-
-                                Text(
-
-                                    text =
-                                        "Dodał: ${produkt.dodal}",
-
-                                    style =
-                                        MaterialTheme
-                                            .typography
-                                            .bodySmall,
-
-                                    color =
-                                        MaterialTheme
-                                            .colorScheme
-                                            .onSurfaceVariant
-                                )
-                            }
-                        }
+                            onAssignProduct =
+                                onAssignProduct
+                        )
                     }
                 }
             }
         }
     }
 }
+
 
 
 // =============================================================
@@ -5910,7 +5726,13 @@ fun ProductCardContent(
         (Produkt) -> Unit,
 
     onEditProduct:
-        (Produkt) -> Unit
+        (Produkt) -> Unit,
+
+    sklepNazwa:
+    String? = null,
+
+    onAssignProduct:
+    ((Produkt) -> Unit)? = null
 ) {
 
     var checked by
@@ -5973,47 +5795,40 @@ fun ProductCardContent(
                     )
         ) {
 
-            Row(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(
-                            rememberScrollState()
-                        )
-            ) {
+            Text(
 
-                Text(
+                text =
+                    produkt.nazwa,
 
-                    text =
-                        produkt.nazwa,
+                style =
+                    MaterialTheme
+                        .typography
+                        .bodyMedium,
 
-                    style =
-                        MaterialTheme
-                            .typography
-                            .bodyMedium,
+                softWrap =
+                    true,
 
-                    maxLines =
-                        1,
+                maxLines =
+                    4,
 
-                    softWrap =
-                        false,
+                overflow =
+                    androidx.compose.ui.text.style.TextOverflow.Clip,
 
-                    textDecoration =
+                textDecoration =
 
-                        if (
-                            produkt.kupione
-                        ) {
+                    if (
+                        produkt.kupione
+                    ) {
 
-                            TextDecoration
-                                .LineThrough
+                        TextDecoration
+                            .LineThrough
 
-                        } else {
+                    } else {
 
-                            TextDecoration
-                                .None
-                        }
-                )
-            }
+                        TextDecoration
+                            .None
+                    }
+            )
 
 
             Text(
@@ -6026,21 +5841,101 @@ fun ProductCardContent(
                         .typography
                         .labelSmall,
 
+                softWrap =
+                    true,
+
                 maxLines =
-                    1,
+                    2,
 
                 overflow =
-                    androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    androidx.compose.ui.text.style.TextOverflow.Clip,
 
                 color =
                     MaterialTheme
                         .colorScheme
                         .onSurfaceVariant
             )
+
+
+            Row(
+
+                modifier =
+                    Modifier
+                        .fillMaxWidth(),
+
+                verticalAlignment =
+                    Alignment.CenterVertically
+            ) {
+
+                Text(
+
+                    text =
+                        if (
+                            sklepNazwa
+                                ?.isNotBlank() == true
+                        ) {
+                            "Sklep: $sklepNazwa"
+                        } else {
+                            "Sklep: Żadna"
+                        },
+
+                    style =
+                        MaterialTheme
+                            .typography
+                            .labelSmall,
+
+                    softWrap =
+                        true,
+
+                    maxLines =
+                        2,
+
+                    overflow =
+                        androidx.compose.ui.text.style.TextOverflow.Clip,
+
+                    color =
+                        MaterialTheme
+                            .colorScheme
+                            .onSurfaceVariant,
+
+                    modifier =
+                        Modifier
+                            .weight(1f)
+                )
+
+
+            }
         }
 
 
-        // Kompaktowe przyciski — nie rozciągają kafelka jak TextButton.
+        // Kompaktowe przyciski — wszystkie są teraz na jednym poziomie:
+        // 🏪 przydziel/zmień sklep, ✏️ edytuj, 🗑️ usuń.
+        if (
+            onAssignProduct != null
+        ) {
+
+            IconButton(
+
+                onClick = {
+                    onAssignProduct(
+                        produkt
+                    )
+                },
+
+                modifier =
+                    Modifier
+                        .size(30.dp)
+            ) {
+
+                Text(
+                    text = "🏪",
+                    fontSize = 15.sp
+                )
+            }
+        }
+
+
+        // Edycja produktu.
         Box(
 
             modifier =
@@ -6589,10 +6484,6 @@ fun DodajLubEdytujSklepDialog(
     }
 
 
-    // =========================================================
-    // GALERIA
-    // =========================================================
-
     val launcher =
         androidx.activity.compose
             .rememberLauncherForActivityResult(
@@ -6612,74 +6503,6 @@ fun DodajLubEdytujSklepDialog(
 
                     typIkony =
                         "image"
-                }
-            }
-
-
-    // =========================================================
-    // APARAT
-    // =========================================================
-
-    val cameraLauncher =
-        androidx.activity.compose
-            .rememberLauncherForActivityResult(
-
-                contract =
-                    ActivityResultContracts
-                        .TakePicturePreview()
-
-            ) { bitmap ->
-
-                if (bitmap != null) {
-
-                    val encoded =
-                        bitmapToBase64(
-                            bitmap
-                        )
-
-                    if (encoded != null) {
-
-                        obrazDane =
-                            encoded
-
-                        wybraneUri =
-                            null
-
-                        typIkony =
-                            "image"
-
-                        blad =
-                            null
-
-                    } else {
-
-                        blad =
-                            "Nie udało się przetworzyć zdjęcia z aparatu."
-                    }
-                }
-            }
-
-
-    val cameraPermissionLauncher =
-        androidx.activity.compose
-            .rememberLauncherForActivityResult(
-
-                contract =
-                    ActivityResultContracts
-                        .RequestPermission()
-
-            ) { granted ->
-
-                if (granted) {
-
-                    cameraLauncher.launch(
-                        null
-                    )
-
-                } else {
-
-                    blad =
-                        "Brak zgody na używanie aparatu."
                 }
             }
 
@@ -6791,12 +6614,11 @@ fun DodajLubEdytujSklepDialog(
                     FilterButton(
 
                         text =
-                            "🖼️ Galeria",
+                            "🖼️ Logo",
 
                         selected =
                             typIkony ==
-                                    "image" &&
-                                    wybraneUri != null,
+                                    "image",
 
                         onClick = {
 
@@ -6806,50 +6628,6 @@ fun DodajLubEdytujSklepDialog(
                             launcher.launch(
                                 "image/*"
                             )
-                        }
-                    )
-
-
-                    FilterButton(
-
-                        text =
-                            "📷 Aparat",
-
-                        selected =
-                            typIkony ==
-                                    "image" &&
-                                    wybraneUri == null &&
-                                    obrazDane.isNotEmpty(),
-
-                        onClick = {
-
-                            typIkony =
-                                "image"
-
-                            blad =
-                                null
-
-                            val permission =
-                                android.Manifest.permission.CAMERA
-
-                            if (
-                                ContextCompat.checkSelfPermission(
-                                    context,
-                                    permission
-                                ) ==
-                                android.content.pm.PackageManager.PERMISSION_GRANTED
-                            ) {
-
-                                cameraLauncher.launch(
-                                    null
-                                )
-
-                            } else {
-
-                                cameraPermissionLauncher.launch(
-                                    permission
-                                )
-                            }
                         }
                     )
                 }
@@ -7314,22 +7092,6 @@ fun UstawieniaScreen(
     var emailTrwa by remember { mutableStateOf(false) }
     var komunikatEmail by remember { mutableStateOf<String?>(null) }
 
-    // =========================================================
-    // AKTUALIZACJE — ręczne sprawdzanie
-    // =========================================================
-
-    var sprawdzanieAktualizacji by remember {
-        mutableStateOf(false)
-    }
-
-    var komunikatAktualizacji by remember {
-        mutableStateOf<String?>(null)
-    }
-
-    var dostepnaAktualizacjaUstawienia by remember {
-        mutableStateOf<GitHubRelease?>(null)
-    }
-
 
     fun saveBoolean(
         key: String,
@@ -7635,59 +7397,7 @@ fun UstawieniaScreen(
 
 
         SettingsSectionTitle(
-            "🔄 Aktualizacje"
-        )
-
-        SettingsCard {
-            SettingsRow(
-                title = "Sprawdź aktualizacje",
-                subtitle = when {
-                    sprawdzanieAktualizacji ->
-                        "Sprawdzanie najnowszej wersji..."
-                    komunikatAktualizacji != null ->
-                        komunikatAktualizacji!!
-                    else ->
-                        "Sprawdź ręcznie, czy jest dostępna nowa wersja"
-                },
-                value = if (sprawdzanieAktualizacji) "…" else "›",
-                enabled = !sprawdzanieAktualizacji,
-                onClick = {
-                    sprawdzanieAktualizacji = true
-                    komunikatAktualizacji = null
-
-                    checkGitHubLatestRelease { release ->
-                        android.os.Handler(
-                            android.os.Looper.getMainLooper()
-                        ).post {
-                            sprawdzanieAktualizacji = false
-
-                            if (release == null) {
-                                komunikatAktualizacji =
-                                    "❌ Nie udało się połączyć z GitHub"
-                                return@post
-                            }
-
-                            if (
-                                release.versionCode >
-                                BuildConfig.VERSION_CODE
-                            ) {
-                                komunikatAktualizacji =
-                                    "🆕 Dostępna wersja ${release.versionName}"
-
-                                dostepnaAktualizacjaUstawienia =
-                                    release
-                            } else {
-                                komunikatAktualizacji =
-                                    "✅ Aplikacja jest aktualna (${BuildConfig.VERSION_NAME})"
-                            }
-                        }
-                    }
-                }
-            )
-        }
-
-        SettingsSectionTitle(
-            "📱 Dodatkowe Ustawienia"
+            "📱 Dodatkowe"
         )
 
 
@@ -7798,30 +7508,6 @@ fun UstawieniaScreen(
         }
     }
 
-
-    dostepnaAktualizacjaUstawienia?.let { release ->
-        UpdateDialog(
-            release = release,
-            onDismiss = {
-                dostepnaAktualizacjaUstawienia = null
-            },
-            onUpdate = {
-                val url = release.downloadUrl
-
-                if (url == null) {
-                    komunikatAktualizacji =
-                        "Ta wersja nie ma pliku APK do pobrania."
-                    dostepnaAktualizacjaUstawienia = null
-                } else {
-                    dostepnaAktualizacjaUstawienia = null
-                    downloadAndInstallUpdate(
-                        context,
-                        url
-                    )
-                }
-            }
-        )
-    }
 
     if (dialog != null) {
 
