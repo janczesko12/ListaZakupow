@@ -7128,7 +7128,7 @@ fun UstawieniaScreen(
         }
 
         SettingsSectionTitle(
-            "📱 Dodatkowe"
+            "📱 Dodatkowe Ustawienia"
         )
 
 
