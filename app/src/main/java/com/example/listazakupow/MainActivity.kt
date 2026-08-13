@@ -685,18 +685,28 @@ fun LoginScreen(
 
 
     // =========================================================
-    // PRODUKTY FIRESTORE
-    // =========================================================
+// PRODUKTY FIRESTORE
+// =========================================================
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(zalogowany) {
+
+        if (!zalogowany || auth.currentUser == null) {
+            return@LaunchedEffect
+        }
 
         db.collection("zakupy")
             .addSnapshotListener { result, error ->
 
-                if (
-                    error != null ||
-                    result == null
-                ) {
+                if (error != null) {
+                    android.util.Log.e(
+                        "ListaZakupow",
+                        "Błąd pobierania produktów z Firestore",
+                        error
+                    )
+                    return@addSnapshotListener
+                }
+
+                if (result == null) {
                     return@addSnapshotListener
                 }
 
@@ -705,41 +715,32 @@ fun LoginScreen(
                 result.documents.forEach { document ->
 
                     lista.add(
-
                         Produkt(
+                            id = document.id,
 
-                            id =
-                                document.id,
+                            nazwa = document.getString(
+                                "nazwa"
+                            ) ?: "",
 
-                            nazwa =
-                                document.getString(
-                                    "nazwa"
-                                ) ?: "",
+                            dodal = document.getString(
+                                "dodal"
+                            ) ?: "",
 
-                            dodal =
-                                document.getString(
-                                    "dodal"
-                                ) ?: "",
+                            kupione = document.getBoolean(
+                                "kupione"
+                            ) ?: false,
 
-                            kupione =
-                                document.getBoolean(
-                                    "kupione"
-                                ) ?: false,
+                            kupioneOd = document.getLong(
+                                "kupioneOd"
+                            ) ?: 0L,
 
-                            kupioneOd =
-                                document.getLong(
-                                    "kupioneOd"
-                                ) ?: 0L,
+                            kolejnosc = document.getLong(
+                                "kolejnosc"
+                            ) ?: 0L,
 
-                            kolejnosc =
-                                document.getLong(
-                                    "kolejnosc"
-                                ) ?: 0L,
-
-                            kategoria =
-                                document.getString(
-                                    "kategoria"
-                                ) ?: "glowna"
+                            kategoria = document.getString(
+                                "kategoria"
+                            ) ?: "glowna"
                         )
                     )
                 }
@@ -751,7 +752,11 @@ fun LoginScreen(
     // SKLEPY FIRESTORE
     // =========================================================
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(zalogowany) {
+
+        if (!zalogowany || auth.currentUser == null) {
+            return@LaunchedEffect
+        }
 
         val ref =
             db.collection("sklepy")
