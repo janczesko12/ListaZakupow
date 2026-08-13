@@ -20,6 +20,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
@@ -1073,6 +1074,83 @@ fun imageUriToBase64(
         )
 
     } catch (e: Exception) {
+
+        null
+    }
+}
+
+
+// =============================================================
+// BITMAP -> BASE64
+// =============================================================
+
+fun bitmapToBase64(
+    bitmap: Bitmap
+): String? {
+
+    return try {
+
+        val maxSize =
+            256
+
+        val ratio =
+            minOf(
+                maxSize.toFloat() /
+                        bitmap.width,
+
+                maxSize.toFloat() /
+                        bitmap.height,
+
+                1f
+            )
+
+        val width =
+            (
+                    bitmap.width *
+                            ratio
+                    )
+                .toInt()
+                .coerceAtLeast(1)
+
+        val height =
+            (
+                    bitmap.height *
+                            ratio
+                    )
+                .toInt()
+                .coerceAtLeast(1)
+
+        val resized =
+            Bitmap.createScaledBitmap(
+                bitmap,
+                width,
+                height,
+                true
+            )
+
+        val output =
+            ByteArrayOutputStream()
+
+        resized.compress(
+            Bitmap.CompressFormat.JPEG,
+            65,
+            output
+        )
+
+        if (
+            resized !== bitmap
+        ) {
+            resized.recycle()
+        }
+
+        Base64.encodeToString(
+            output.toByteArray(),
+            Base64.NO_WRAP
+        )
+
+    } catch (
+        e: Exception
+    ) {
 
         null
     }
@@ -6511,6 +6589,10 @@ fun DodajLubEdytujSklepDialog(
     }
 
 
+    // =========================================================
+    // GALERIA
+    // =========================================================
+
     val launcher =
         androidx.activity.compose
             .rememberLauncherForActivityResult(
@@ -6530,6 +6612,74 @@ fun DodajLubEdytujSklepDialog(
 
                     typIkony =
                         "image"
+                }
+            }
+
+
+    // =========================================================
+    // APARAT
+    // =========================================================
+
+    val cameraLauncher =
+        androidx.activity.compose
+            .rememberLauncherForActivityResult(
+
+                contract =
+                    ActivityResultContracts
+                        .TakePicturePreview()
+
+            ) { bitmap ->
+
+                if (bitmap != null) {
+
+                    val encoded =
+                        bitmapToBase64(
+                            bitmap
+                        )
+
+                    if (encoded != null) {
+
+                        obrazDane =
+                            encoded
+
+                        wybraneUri =
+                            null
+
+                        typIkony =
+                            "image"
+
+                        blad =
+                            null
+
+                    } else {
+
+                        blad =
+                            "Nie udało się przetworzyć zdjęcia z aparatu."
+                    }
+                }
+            }
+
+
+    val cameraPermissionLauncher =
+        androidx.activity.compose
+            .rememberLauncherForActivityResult(
+
+                contract =
+                    ActivityResultContracts
+                        .RequestPermission()
+
+            ) { granted ->
+
+                if (granted) {
+
+                    cameraLauncher.launch(
+                        null
+                    )
+
+                } else {
+
+                    blad =
+                        "Brak zgody na używanie aparatu."
                 }
             }
 
@@ -6641,11 +6791,12 @@ fun DodajLubEdytujSklepDialog(
                     FilterButton(
 
                         text =
-                            "🖼️ Logo",
+                            "🖼️ Galeria",
 
                         selected =
                             typIkony ==
-                                    "image",
+                                    "image" &&
+                                    wybraneUri != null,
 
                         onClick = {
 
@@ -6655,6 +6806,50 @@ fun DodajLubEdytujSklepDialog(
                             launcher.launch(
                                 "image/*"
                             )
+                        }
+                    )
+
+
+                    FilterButton(
+
+                        text =
+                            "📷 Aparat",
+
+                        selected =
+                            typIkony ==
+                                    "image" &&
+                                    wybraneUri == null &&
+                                    obrazDane.isNotEmpty(),
+
+                        onClick = {
+
+                            typIkony =
+                                "image"
+
+                            blad =
+                                null
+
+                            val permission =
+                                android.Manifest.permission.CAMERA
+
+                            if (
+                                ContextCompat.checkSelfPermission(
+                                    context,
+                                    permission
+                                ) ==
+                                android.content.pm.PackageManager.PERMISSION_GRANTED
+                            ) {
+
+                                cameraLauncher.launch(
+                                    null
+                                )
+
+                            } else {
+
+                                cameraPermissionLauncher.launch(
+                                    permission
+                                )
+                            }
                         }
                     )
                 }
