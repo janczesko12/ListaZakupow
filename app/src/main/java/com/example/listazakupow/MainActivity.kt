@@ -146,24 +146,39 @@ private fun checkGitHubLatestRelease(
         var connection: HttpURLConnection? = null
 
         try {
+            android.util.Log.d(
+                "ListaZakupowUpdate",
+                "Rozpoczynam sprawdzanie aktualizacji..."
+            )
+
             val url = URL(
                 "https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/releases/latest"
             )
 
             connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
-            connection.connectTimeout = 10_000
-            connection.readTimeout = 10_000
+            connection.connectTimeout = 5_000
+            connection.readTimeout = 5_000
+            connection.useCaches = false
+
             connection.setRequestProperty(
                 "Accept",
                 "application/vnd.github+json"
             )
+
             connection.setRequestProperty(
                 "User-Agent",
                 "ListaZakupow-Android"
             )
 
-            if (connection.responseCode !in 200..299) {
+            val responseCode = connection.responseCode
+
+            android.util.Log.d(
+                "ListaZakupowUpdate",
+                "GitHub HTTP: $responseCode"
+            )
+
+            if (responseCode !in 200..299) {
                 onResult(null)
                 return@Thread
             }
@@ -172,15 +187,34 @@ private fun checkGitHubLatestRelease(
                 .bufferedReader()
                 .use { it.readText() }
 
+            android.util.Log.d(
+                "ListaZakupowUpdate",
+                "Odpowiedź GitHub otrzymana"
+            )
+
             val tagName = Regex(
                 """"tag_name"\s*:\s*"([^"]+)"""
-            ).find(response)?.groupValues?.getOrNull(1)
+            ).find(response)
+                ?.groupValues
+                ?.getOrNull(1)
 
-            val versionCode = tagName?.let {
-                extractReleaseVersion(it)
+            android.util.Log.d(
+                "ListaZakupowUpdate",
+                "tag_name = $tagName"
+            )
+
+            if (tagName.isNullOrBlank()) {
+                onResult(null)
+                return@Thread
             }
 
+            val versionCode = extractReleaseVersion(tagName)
+
             if (versionCode == null) {
+                android.util.Log.e(
+                    "ListaZakupowUpdate",
+                    "Nie udało się odczytać numeru wersji z: $tagName"
+                )
                 onResult(null)
                 return@Thread
             }
@@ -190,7 +224,24 @@ private fun checkGitHubLatestRelease(
             val apkDownloadUrl = Regex(
                 """"browser_download_url"\s*:\s*"([^"]+\.apk)""",
                 RegexOption.IGNORE_CASE
-            ).find(response)?.groupValues?.getOrNull(1)
+            ).find(response)
+                ?.groupValues
+                ?.getOrNull(1)
+
+            android.util.Log.d(
+                "ListaZakupowUpdate",
+                "GitHub versionCode = $versionCode"
+            )
+
+            android.util.Log.d(
+                "ListaZakupowUpdate",
+                "GitHub versionName = $versionName"
+            )
+
+            android.util.Log.d(
+                "ListaZakupowUpdate",
+                "APK = $apkDownloadUrl"
+            )
 
             onResult(
                 GitHubRelease(
@@ -199,12 +250,22 @@ private fun checkGitHubLatestRelease(
                     downloadUrl = apkDownloadUrl
                 )
             )
-        } catch (_: Exception) {
+
+        } catch (e: Exception) {
+            android.util.Log.e(
+                "ListaZakupowUpdate",
+                "Błąd sprawdzania aktualizacji",
+                e
+            )
             onResult(null)
+
         } finally {
-            connection?.disconnect()
+            try {
+                connection?.disconnect()
+            } catch (_: Exception) {
+            }
         }
-    }
+    }.start()
 }
 
 private fun shouldCheckForUpdate(context: Context): Boolean {
@@ -6694,6 +6755,22 @@ fun UstawieniaScreen(
     var emailTrwa by remember { mutableStateOf(false) }
     var komunikatEmail by remember { mutableStateOf<String?>(null) }
 
+    // =========================================================
+    // AKTUALIZACJE — ręczne sprawdzanie
+    // =========================================================
+
+    var sprawdzanieAktualizacji by remember {
+        mutableStateOf(false)
+    }
+
+    var komunikatAktualizacji by remember {
+        mutableStateOf<String?>(null)
+    }
+
+    var dostepnaAktualizacjaUstawienia by remember {
+        mutableStateOf<GitHubRelease?>(null)
+    }
+
 
     fun saveBoolean(
         key: String,
@@ -6999,6 +7076,58 @@ fun UstawieniaScreen(
 
 
         SettingsSectionTitle(
+            "🔄 Aktualizacje"
+        )
+
+        SettingsCard {
+            SettingsRow(
+                title = "Sprawdź aktualizacje",
+                subtitle = when {
+                    sprawdzanieAktualizacji ->
+                        "Sprawdzanie najnowszej wersji..."
+                    komunikatAktualizacji != null ->
+                        komunikatAktualizacji!!
+                    else ->
+                        "Sprawdź ręcznie, czy jest dostępna nowa wersja"
+                },
+                value = if (sprawdzanieAktualizacji) "…" else "›",
+                enabled = !sprawdzanieAktualizacji,
+                onClick = {
+                    sprawdzanieAktualizacji = true
+                    komunikatAktualizacji = null
+
+                    checkGitHubLatestRelease { release ->
+                        android.os.Handler(
+                            android.os.Looper.getMainLooper()
+                        ).post {
+                            sprawdzanieAktualizacji = false
+
+                            if (release == null) {
+                                komunikatAktualizacji =
+                                    "❌ Nie udało się połączyć z GitHub"
+                                return@post
+                            }
+
+                            if (
+                                release.versionCode >
+                                BuildConfig.VERSION_CODE
+                            ) {
+                                komunikatAktualizacji =
+                                    "🆕 Dostępna wersja ${release.versionName}"
+
+                                dostepnaAktualizacjaUstawienia =
+                                    release
+                            } else {
+                                komunikatAktualizacji =
+                                    "✅ Aplikacja jest aktualna • ${BuildConfig.VERSION_NAME}"
+                            }
+                        }
+                    }
+                }
+            )
+        }
+
+        SettingsSectionTitle(
             "📱 Dodatkowe"
         )
 
@@ -7110,6 +7239,30 @@ fun UstawieniaScreen(
         }
     }
 
+
+    dostepnaAktualizacjaUstawienia?.let { release ->
+        UpdateDialog(
+            release = release,
+            onDismiss = {
+                dostepnaAktualizacjaUstawienia = null
+            },
+            onUpdate = {
+                val url = release.downloadUrl
+
+                if (url == null) {
+                    komunikatAktualizacji =
+                        "Ta wersja nie ma pliku APK do pobrania."
+                    dostepnaAktualizacjaUstawienia = null
+                } else {
+                    dostepnaAktualizacjaUstawienia = null
+                    downloadAndInstallUpdate(
+                        context,
+                        url
+                    )
+                }
+            }
+        )
+    }
 
     if (dialog != null) {
 
