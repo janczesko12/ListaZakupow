@@ -7,6 +7,14 @@ import android.net.Uri
 import android.os.Bundle
 import android.view.HapticFeedbackConstants
 import android.view.View
+import android.app.DownloadManager
+import android.content.BroadcastReceiver
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Environment
+import android.widget.Toast
+import java.net.HttpURLConnection
+import java.net.URL
 import android.util.Base64
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -110,6 +118,280 @@ import androidx.compose.ui.text.input.KeyboardType
 
 
 // =============================================================
+// AUTOMATYCZNE SPRAWDZANIE AKTUALIZACJI
+// =============================================================
+
+private const val UPDATE_PREFS = "lista_zakupow_updates"
+private const val KEY_LAST_UPDATE_CHECK = "last_update_check"
+private const val UPDATE_CHECK_INTERVAL = 7L * 24L * 60L * 60L * 1000L
+
+private const val GITHUB_OWNER = "janczesko12"
+private const val GITHUB_REPO = "ListaZakupow"
+
+private data class GitHubRelease(
+    val versionCode: Int,
+    val versionName: String,
+    val downloadUrl: String?
+)
+
+private fun extractReleaseVersion(tagName: String): Int? {
+    val number = Regex("""\d+""").find(tagName)?.value ?: return null
+    return number.toIntOrNull()
+}
+
+private fun checkGitHubLatestRelease(
+    onResult: (GitHubRelease?) -> Unit
+) {
+    Thread {
+        var connection: HttpURLConnection? = null
+
+        try {
+            val url = URL(
+                "https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/releases/latest"
+            )
+
+            connection = url.openConnection() as HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 10_000
+            connection.setRequestProperty(
+                "Accept",
+                "application/vnd.github+json"
+            )
+            connection.setRequestProperty(
+                "User-Agent",
+                "ListaZakupow-Android"
+            )
+
+            if (connection.responseCode !in 200..299) {
+                onResult(null)
+                return@Thread
+            }
+
+            val response = connection.inputStream
+                .bufferedReader()
+                .use { it.readText() }
+
+            val tagName = Regex(
+                """"tag_name"\s*:\s*"([^"]+)"""
+            ).find(response)?.groupValues?.getOrNull(1)
+
+            val versionCode = tagName?.let {
+                extractReleaseVersion(it)
+            }
+
+            if (versionCode == null) {
+                onResult(null)
+                return@Thread
+            }
+
+            val versionName = tagName.removePrefix("v")
+
+            val apkDownloadUrl = Regex(
+                """"browser_download_url"\s*:\s*"([^"]+\.apk)""",
+                RegexOption.IGNORE_CASE
+            ).find(response)?.groupValues?.getOrNull(1)
+
+            onResult(
+                GitHubRelease(
+                    versionCode = versionCode,
+                    versionName = versionName,
+                    downloadUrl = apkDownloadUrl
+                )
+            )
+        } catch (_: Exception) {
+            onResult(null)
+        } finally {
+            connection?.disconnect()
+        }
+    }
+}
+
+private fun shouldCheckForUpdate(context: Context): Boolean {
+    val prefs = context.getSharedPreferences(
+        UPDATE_PREFS,
+        Context.MODE_PRIVATE
+    )
+
+    val lastCheck = prefs.getLong(
+        KEY_LAST_UPDATE_CHECK,
+        0L
+    )
+
+    return System.currentTimeMillis() - lastCheck >= UPDATE_CHECK_INTERVAL
+}
+
+private fun markUpdateCheck(context: Context) {
+    context.getSharedPreferences(
+        UPDATE_PREFS,
+        Context.MODE_PRIVATE
+    )
+        .edit()
+        .putLong(
+            KEY_LAST_UPDATE_CHECK,
+            System.currentTimeMillis()
+        )
+        .apply()
+}
+
+private fun downloadAndInstallUpdate(
+    context: Context,
+    downloadUrl: String
+) {
+    try {
+        val request = DownloadManager.Request(
+            Uri.parse(downloadUrl)
+        )
+            .setTitle("Lista Zakupów — aktualizacja")
+            .setDescription("Pobieranie nowej wersji aplikacji")
+            .setNotificationVisibility(
+                DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
+            )
+            .setDestinationInExternalPublicDir(
+                Environment.DIRECTORY_DOWNLOADS,
+                "ListaZakupow-update.apk"
+            )
+            .setMimeType("application/vnd.android.package-archive")
+            .setAllowedOverMetered(true)
+            .setAllowedOverRoaming(true)
+
+        val downloadManager = context.getSystemService(
+            Context.DOWNLOAD_SERVICE
+        ) as DownloadManager
+
+        val downloadId = downloadManager.enqueue(request)
+
+        Toast.makeText(
+            context,
+            "Pobieranie aktualizacji rozpoczęte.",
+            Toast.LENGTH_SHORT
+        ).show()
+
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(
+                receiverContext: Context,
+                intent: Intent
+            ) {
+                val completedId = intent.getLongExtra(
+                    DownloadManager.EXTRA_DOWNLOAD_ID,
+                    -1L
+                )
+
+                if (completedId != downloadId) return
+
+                try {
+                    val apkUri = downloadManager.getUriForDownloadedFile(
+                        downloadId
+                    )
+
+                    if (apkUri == null) {
+                        Toast.makeText(
+                            context,
+                            "Nie udało się pobrać aktualizacji.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return
+                    }
+
+                    val installIntent = Intent(
+                        Intent.ACTION_VIEW
+                    ).apply {
+                        setDataAndType(
+                            apkUri,
+                            "application/vnd.android.package-archive"
+                        )
+                        addFlags(
+                            Intent.FLAG_ACTIVITY_NEW_TASK or
+                                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        )
+                    }
+
+                    context.startActivity(installIntent)
+                } catch (_: Exception) {
+                    Toast.makeText(
+                        context,
+                        "Nie udało się uruchomić instalatora.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                } finally {
+                    try {
+                        receiverContext.unregisterReceiver(this)
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+        }
+
+        androidx.core.content.ContextCompat.registerReceiver(
+            context,
+            receiver,
+            IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+    } catch (_: Exception) {
+        Toast.makeText(
+            context,
+            "Nie udało się rozpocząć pobierania aktualizacji.",
+            Toast.LENGTH_LONG
+        ).show()
+    }
+}
+
+@Composable
+private fun UpdateDialog(
+    release: GitHubRelease,
+    onDismiss: () -> Unit,
+    onUpdate: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text("🆕 Dostępna nowa wersja")
+        },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    "Dostępna jest nowa wersja aplikacji Lista Zakupów."
+                )
+
+                Text(
+                    "Nowa wersja: ${release.versionName}",
+                    style = MaterialTheme.typography.titleMedium
+                )
+
+                Text(
+                    "Aktualnie zainstalowana wersja: ${BuildConfig.VERSION_NAME}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                if (release.downloadUrl == null) {
+                    Text(
+                        "Ta wersja nie ma jeszcze pliku APK do pobrania.",
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = release.downloadUrl != null,
+                onClick = onUpdate
+            ) {
+                Text("POBIERZ AKTUALIZACJĘ")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("PÓŹNIEJ")
+            }
+        }
+    )
+}
+
+// =============================================================
 // MAIN ACTIVITY
 // =============================================================
 
@@ -189,6 +471,29 @@ class MainActivity : ComponentActivity() {
 
         setContent {
 
+            var dostepnaAktualizacja by remember {
+                mutableStateOf<GitHubRelease?>(null)
+            }
+
+            val updateContext = LocalContext.current
+
+            LaunchedEffect(Unit) {
+                if (shouldCheckForUpdate(updateContext)) {
+                    markUpdateCheck(updateContext)
+
+                    checkGitHubLatestRelease { release ->
+                        if (
+                            release != null &&
+                            release.versionCode > BuildConfig.VERSION_CODE
+                        ) {
+                            runOnUiThread {
+                                dostepnaAktualizacja = release
+                            }
+                        }
+                    }
+                }
+            }
+
             var wibracjeWlaczone by remember {
                 mutableStateOf(
                     getSharedPreferences(
@@ -257,6 +562,25 @@ class MainActivity : ComponentActivity() {
 
                             wibracjeWlaczone =
                                 it
+                        }
+                    )
+                }
+
+                dostepnaAktualizacja?.let { release ->
+                    UpdateDialog(
+                        release = release,
+                        onDismiss = {
+                            dostepnaAktualizacja = null
+                        },
+                        onUpdate = {
+                            val url = release.downloadUrl
+                            if (url != null) {
+                                dostepnaAktualizacja = null
+                                downloadAndInstallUpdate(
+                                    updateContext,
+                                    url
+                                )
+                            }
                         }
                     )
                 }
