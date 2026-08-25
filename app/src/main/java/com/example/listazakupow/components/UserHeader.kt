@@ -16,14 +16,14 @@ import androidx.compose.animation.togetherWith
 fun UserHeader(
     imie: String,
     liczbaProduktow: Int,
-    onLogout: () -> Unit
+    onLogout: () -> Unit,
 ) {
 
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
         elevation = CardDefaults.cardElevation(
-            defaultElevation = 8.dp
+            defaultElevation = 8.dp,
         )
     ) {
 

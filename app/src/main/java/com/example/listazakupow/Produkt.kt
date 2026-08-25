@@ -7,5 +7,5 @@ data class Produkt(
     var kupione: Boolean = false,
     var kupioneOd: Long = 0L,
     var kolejnosc: Long = 0L,
-    var kategoria: String = "glowna"
+    var kategoria: String = "glowna",
 )

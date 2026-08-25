@@ -14,7 +14,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.listazakupow"
+        applicationId = "pl.listazakupow.mobile"
 
         minSdk = 24
         targetSdk = 36
@@ -82,21 +82,21 @@ dependencies {
     // Firebase
     implementation(
         platform(
-            "com.google.firebase:firebase-bom:34.13.0"
+            libs.firebase.bom
         )
     )
 
     implementation(
-        "com.google.firebase:firebase-auth"
+        libs.firebase.auth
     )
 
     implementation(
-        "com.google.firebase:firebase-firestore"
+        libs.firebase.firestore
     )
 
     // Coil
     implementation(
-        "io.coil-kt:coil-compose:2.7.0"
+        libs.coil.compose
     )
 
     // Jetpack Compose

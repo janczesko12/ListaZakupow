@@ -6,5 +6,5 @@ data class Sklep(
     val typIkony: String = "emoji",
     val emoji: String = "🏪",
     val obrazDane: String = "",
-    val kolejnosc: Long = 0L
+    val kolejnosc: Long = 0L,
 )
