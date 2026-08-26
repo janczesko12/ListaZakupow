@@ -7,4 +7,6 @@ data class Sklep(
     val emoji: String = "🏪",
     val obrazDane: String = "",
     val kolejnosc: Long = 0L,
+    val userId: String = "",
+    val sharedWith: List<String> = emptyList(),
 )

@@ -22,10 +22,10 @@ android {
         val githubRunNumber =
             System.getenv("GITHUB_RUN_NUMBER")
                 ?.toIntOrNull()
-                ?: 1
+                ?: 30
 
         versionCode = githubRunNumber
-        versionName = "1.$githubRunNumber"
+        versionName = "v30"
 
         testInstrumentationRunner =
             "androidx.test.runner.AndroidJUnitRunner"
