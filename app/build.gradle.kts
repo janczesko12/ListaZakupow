@@ -25,7 +25,7 @@ android {
                 ?: 30
 
         versionCode = githubRunNumber
-        versionName = "v30"
+        versionName = "v27"
 
         testInstrumentationRunner =
             "androidx.test.runner.AndroidJUnitRunner"

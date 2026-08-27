@@ -65,6 +65,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -454,6 +455,8 @@ fun LoginScreen(modifier: Modifier, onThemeChanged: (String) -> Unit, onHapticsC
         var isReg by remember { mutableStateOf(false) }
         var trw by remember { mutableStateOf(false) }; var err by remember { mutableStateOf<String?>(null) }
         var rImie by remember { mutableStateOf("") }; var rLog by remember { mutableStateOf("") }; var rMail by remember { mutableStateOf("") }; var rPass by remember { mutableStateOf("") }
+        var passVisible by remember { mutableStateOf(false) }
+        
         Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
             Card(shape = RoundedCornerShape(28.dp), elevation = CardDefaults.cardElevation(6.dp)) {
                 Column(Modifier.padding(24.dp).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -464,13 +467,56 @@ fun LoginScreen(modifier: Modifier, onThemeChanged: (String) -> Unit, onHapticsC
                         OutlinedTextField(value = rImie, onValueChange = { rImie = it; rLog = it.lowercase().replace(" ", "") }, label = { Text("Imię") }, modifier = Modifier.fillMaxWidth())
                         OutlinedTextField(value = rLog, onValueChange = { rLog = it }, label = { Text("Login") }, modifier = Modifier.fillMaxWidth())
                         OutlinedTextField(value = rMail, onValueChange = { rMail = it }, label = { Text("E-mail") }, modifier = Modifier.fillMaxWidth())
-                        OutlinedTextField(value = rPass, onValueChange = { rPass = it }, label = { Text("Hasło") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(
+                            value = rPass, 
+                            onValueChange = { rPass = it }, 
+                            label = { Text("Hasło") }, 
+                            visualTransformation = if (passVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            trailingIcon = {
+                                IconButton(onClick = { passVisible = !passVisible }) {
+                                    Text(if (passVisible) "👁️" else "🙈")
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     } else {
                         OutlinedTextField(value = login, onValueChange = { login = it }, label = { Text("Login") }, modifier = Modifier.fillMaxWidth())
-                        OutlinedTextField(value = pin, onValueChange = { pin = it }, label = { Text("Hasło") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(
+                            value = pin, 
+                            onValueChange = { pin = it }, 
+                            label = { Text("Hasło") }, 
+                            visualTransformation = if (passVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            trailingIcon = {
+                                IconButton(onClick = { passVisible = !passVisible }) {
+                                    Text(if (passVisible) "👁️" else "🙈")
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+                            TextButton(
+                                contentPadding = PaddingValues(0.dp),
+                                onClick = {
+                                    val cleanLogin = login.trim().lowercase()
+                                    if (cleanLogin.isEmpty()) { err = "Wpisz login, aby zresetować hasło"; return@TextButton }
+                                    trw = true; err = null
+                                    db.collection("loginLookup").document(cleanLogin).get().addOnSuccessListener { d ->
+                                        if (!d.exists()) { trw = false; err = "Brak loginu: $cleanLogin" }
+                                        else {
+                                            val email = d.getString("email") ?: ""
+                                            if (email.isEmpty()) { trw = false; err = "Błąd konta" }
+                                            else auth.sendPasswordResetEmail(email).addOnSuccessListener {
+                                                trw = false; Toast.makeText(ctx, "Link do resetu wysłany na e-mail", Toast.LENGTH_LONG).show()
+                                            }.addOnFailureListener { trw = false; err = "Błąd wysyłania" }
+                                        }
+                                    }.addOnFailureListener { trw = false; err = "Błąd bazy" }
+                                }
+                            ) {
+                                Text("Zapomniałeś hasła?", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
                     }
-                    err?.let { Text(it, color = Color.Red, style = MaterialTheme.typography.bodySmall) }
-                    Spacer(Modifier.height(16.dp))
+                    err?.let { Text(it, color = Color.Red, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp)) }
                     Button(onClick = {
                         trw = true; err = null
                         if(isReg) {
@@ -497,7 +543,10 @@ fun LoginScreen(modifier: Modifier, onThemeChanged: (String) -> Unit, onHapticsC
                             }.addOnFailureListener { trw = false; err = "Błąd bazy" }
                         }
                     }, modifier = Modifier.fillMaxWidth()) { if(trw) CircularProgressIndicator(Modifier.size(20.dp)) else Text(if(isReg) "Utwórz konto" else "Zaloguj się") }
-                    TextButton(onClick = { isReg = !isReg; err = null }) { Text(if(isReg) "Masz konto? Zaloguj się" else "Nie masz konta? Zarejestruj się") }
+                    TextButton(
+                        contentPadding = PaddingValues(0.dp),
+                        onClick = { isReg = !isReg; err = null }
+                    ) { Text(if(isReg) "Masz konto? Zaloguj się" else "Nie masz konta? Zarejestruj się") }
                 }
             }
         }
@@ -507,7 +556,7 @@ fun LoginScreen(modifier: Modifier, onThemeChanged: (String) -> Unit, onHapticsC
     Box(modifier.fillMaxSize()) {
         AnimatedContent(targetState = wybranaZakladka, label = "tabs") { zak ->
             when(zak) {
-                0 -> Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(start = 24.dp, top = 24.dp, end = 24.dp, bottom = 120.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                0 -> Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(start = 24.dp, top = 24.dp, end = 24.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(text = "🛒 Lista zakupów", style = MaterialTheme.typography.titleMedium)
                     }
@@ -666,7 +715,7 @@ fun LoginScreen(modifier: Modifier, onThemeChanged: (String) -> Unit, onHapticsC
         )
         if (pokazDialogSortowania) ChoiceDialog("Sortowanie", listOf("reczna" to "Ręczna", "az" to "A-Z", "za" to "Z-A", "dokupienia" to "Do kupienia", "kupione" to "Kupione"), trybSortowania, { trybSortowania = it; pokazDialogSortowania = false }, { pokazDialogSortowania = false })
 
-        Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 58.dp).align(Alignment.BottomCenter), shape = RoundedCornerShape(28.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), elevation = CardDefaults.cardElevation(8.dp)) {
+        Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 8.dp).align(Alignment.BottomCenter), shape = RoundedCornerShape(28.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), elevation = CardDefaults.cardElevation(8.dp)) {
             Row(modifier = Modifier.fillMaxWidth().padding(8.dp), Arrangement.SpaceEvenly, Alignment.CenterVertically) {
                 DolnaNawigacjaItem("🛒", "Lista", wybranaZakladka == 0) { wybranaZakladka = 0 }
                 DolnaNawigacjaItem("🏪", "Sklepy", wybranaZakladka == 1) { wybranaZakladka = 1 }
@@ -733,7 +782,7 @@ fun SklepCardContent(s: Sklep, onEdit: () -> Unit, onDelete: () -> Unit) {
 
 @Composable
 fun SklepyScreen(sklepy: List<Sklep>, onClick: (String) -> Unit, onAdd: () -> Unit, onEdit: (Sklep) -> Unit, onDelete: (Sklep) -> Unit, onStart: () -> Unit, onEnd: () -> Unit, onMove: (Int, Int) -> Unit) {
-    Column(Modifier.fillMaxSize().padding(24.dp).padding(bottom = 140.dp)) {
+    Column(Modifier.fillMaxSize().padding(24.dp).padding(bottom = 8.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("🏪 Sklepy", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
             Button(onClick = onAdd) { Text("+ Sklep") }
@@ -758,7 +807,7 @@ fun SklepyScreen(sklepy: List<Sklep>, onClick: (String) -> Unit, onAdd: () -> Un
 fun ListaSklepuScreen(id: String, s: Sklep?, lista: List<Produkt>, imie: String, onBack: () -> Unit, onDelete: (Produkt) -> Unit, onEdit: (Produkt) -> Unit, onAssign: (Produkt) -> Unit) {
     val ctx = LocalContext.current
     val prods = lista.filter { it.kategoria == id }
-    Column(Modifier.fillMaxSize().padding(24.dp).padding(bottom = 140.dp)) {
+    Column(Modifier.fillMaxSize().padding(24.dp).padding(bottom = 8.dp)) {
         TextButton(onClick = onBack) { Text("← Wróć") }
         Text(s?.nazwa ?: id, style = MaterialTheme.typography.headlineSmall)
         Row(Modifier.fillMaxWidth().padding(top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -970,7 +1019,7 @@ fun UstawieniaScreen(currentEmail: String, onEmailChanged: (String) -> Unit, onT
     fun saveInt(k: String, v: Int) = prefs.edit { putInt(k, v) }
     fun saveString(k: String, v: String) = prefs.edit { putString(k, v) }
 
-    Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).verticalScroll(rememberScrollState()).padding(start = 20.dp, top = 20.dp, end = 20.dp, bottom = 140.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).verticalScroll(rememberScrollState()).padding(start = 20.dp, top = 20.dp, end = 20.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("⚙️ Ustawienia", style = MaterialTheme.typography.headlineSmall)
         SettingsSectionTitle("🎨 Wygląd")
         SettingsCard { SettingsRow("Motyw aplikacji", when(theme){"dark"->"Ciemny";"light"->"Jasny";else->"Systemowy"}, "›", onClick = { dialog = "theme" }) }
