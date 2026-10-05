@@ -16,6 +16,8 @@ import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.core.content.edit
 import android.os.Bundle
+import android.os.Looper
+import android.os.Handler
 import android.view.HapticFeedbackConstants
 import android.app.DownloadManager
 import android.content.BroadcastReceiver
@@ -57,6 +59,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -70,6 +73,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
@@ -93,14 +97,39 @@ import kotlin.time.Duration.Companion.milliseconds
 
 private const val UPDATE_PREFS = "lista_zakupow_updates"
 private const val KEY_LAST_UPDATE_CHECK = "last_update_check"
-private const val UPDATE_CHECK_INTERVAL = 7L * 24L * 60L * 60L * 1000L
+private const val UPDATE_CHECK_INTERVAL = 24L * 60L * 60L * 1000L
 private const val CHANNEL_UPDATES = "updates"
 private const val CHANNEL_ACTIVITY = "list_activity"
 private const val INVITE_VALIDITY_MS = 24L * 60L * 60L * 1000L
 private const val INVITE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 private const val INVITE_BASE_URL = "https://mythoria.pl/invite"
 
-private data class GitHubRelease(val versionCode: Int, val versionName: String, val downloadUrl: String?)
+private data class GitHubRelease(val versionCode: Int?, val versionName: String, val downloadUrl: String?)
+
+private fun parseVersionParts(version: String): List<Int>? {
+    val clean = version.trim().removePrefix("v").removePrefix("V")
+    if (!Regex("^\\d+(?:\\.\\d+)*$").matches(clean)) return null
+    return clean.split(".").mapNotNull { it.toIntOrNull() }.takeIf { it.isNotEmpty() }
+}
+
+private fun compareVersions(a: String, b: String): Int {
+    val pa = parseVersionParts(a) ?: return 0
+    val pb = parseVersionParts(b) ?: return 0
+    val size = maxOf(pa.size, pb.size)
+    for (i in 0 until size) {
+        val av = pa.getOrElse(i) { 0 }; val bv = pb.getOrElse(i) { 0 }
+        if (av != bv) return av.compareTo(bv)
+    }
+    return 0
+}
+
+private fun isReleaseNewer(release: GitHubRelease): Boolean {
+    val local = BuildConfig.VERSION_NAME
+    val remote = release.versionName
+    val lp = parseVersionParts(local); val rp = parseVersionParts(remote)
+    if (lp != null && rp != null && (lp.size > 1 || rp.size > 1)) return compareVersions(remote, local) > 0
+    return release.versionCode != null && release.versionCode > BuildConfig.VERSION_CODE
+}
 
 private fun generateInviteCode(): String {
     val random = SecureRandom()
@@ -118,17 +147,25 @@ private fun extractInviteId(uri: Uri?): String? {
 private fun checkGitHubLatestRelease(onResult: (GitHubRelease?) -> Unit) {
     Thread {
         var conn: HttpURLConnection? = null
+        var result: GitHubRelease? = null
         try {
-            val url = URL("https://api.github.com/repos/janczesko12/ListaZakupow/releases/latest")
-            conn = url.openConnection() as HttpURLConnection
+            conn = URL("https://api.github.com/repos/janczesko12/ListaZakupow/releases/latest").openConnection() as HttpURLConnection
+            conn.connectTimeout = 10_000; conn.readTimeout = 10_000
+            conn.setRequestProperty("Accept", "application/vnd.github+json")
             conn.setRequestProperty("User-Agent", "ListaZakupow-Android")
-            if (conn.responseCode !in 200..299) { onResult(null); return@Thread }
+            if (conn.responseCode !in 200..299) return@Thread
             val res = conn.inputStream.bufferedReader().use { it.readText() }
-            val tag = Regex("\"tag_name\"\\s*:\\s*\"([^\"]+)\"").find(res)?.groupValues?.get(1)
-            val code = Regex("\\d+").find(tag ?: "")?.value?.toIntOrNull() ?: 0
-            val apk = Regex("\"browser_download_url\"\\s*:\\s*\"([^\"]+\\.apk)\"", RegexOption.IGNORE_CASE).find(res)?.groupValues?.get(1)
-            onResult(GitHubRelease(code, tag?.removePrefix("v") ?: "", apk))
-        } catch (_: Exception) { onResult(null) } finally { conn?.disconnect() }
+            val tag = Regex("""\"tag_name\"\s*:\s*\"([^\"]+)\"""")
+                .find(res)?.groupValues?.get(1) ?: return@Thread
+            val cleanTag = tag.removePrefix("v").removePrefix("V")
+            val versionCode = if (Regex("^\\d+$").matches(cleanTag)) cleanTag.toIntOrNull() else null
+            val apk = Regex(
+                """\"browser_download_url\"\s*:\s*\"([^\"]+\.apk(?:\?[^\"]*)?)\"""",
+                RegexOption.IGNORE_CASE
+            ).find(res)?.groupValues?.get(1)
+            result = GitHubRelease(versionCode, cleanTag, apk)
+        } catch (_: Exception) { result = null } finally { conn?.disconnect() }
+        Handler(Looper.getMainLooper()).post { onResult(result) }
     }.start()
 }
 
@@ -192,7 +229,7 @@ class MainActivity : ComponentActivity() {
                 val last = ctx.getSharedPreferences(UPDATE_PREFS, Context.MODE_PRIVATE).getLong(KEY_LAST_UPDATE_CHECK, 0L)
                 if (System.currentTimeMillis() - last >= UPDATE_CHECK_INTERVAL) {
                     ctx.getSharedPreferences(UPDATE_PREFS, Context.MODE_PRIVATE).edit { putLong(KEY_LAST_UPDATE_CHECK, System.currentTimeMillis()) }
-                    checkGitHubLatestRelease { r -> if (r != null && r.versionCode > BuildConfig.VERSION_CODE) { upd = r; NotificationHelper.showUpdateNotification(ctx, r.versionName) } }
+                    checkGitHubLatestRelease { r -> if (r != null && isReleaseNewer(r)) { upd = r; NotificationHelper.showUpdateNotification(ctx, r.versionName) } }
                 }
             }
 
@@ -376,15 +413,34 @@ fun LoginScreen(modifier: Modifier, onThemeChanged: (String) -> Unit, onHapticsC
 
     val effectiveOwnerId = sharedOwnerId.ifEmpty { auth.currentUser?.uid ?: "" }
 
+    // Automatyczne usuwanie kupionych produktów według czasu ustawionego w Ustawieniach.
+    // Sprawdzamy okresowo, aby zmiana czasu obowiązywała również bez restartu aplikacji.
+    LaunchedEffect(zalogowany, effectiveOwnerId) {
+        while (isActive) {
+            if (zalogowany && effectiveOwnerId.isNotEmpty()) {
+                val autoDelete = setPrefs.getBoolean(KEY_AUTO_DELETE, true)
+                val seconds = setPrefs.getInt(KEY_DELETE_SECONDS, 1200).coerceAtLeast(1)
+                if (autoDelete) {
+                    val limit = System.currentTimeMillis() - seconds * 1_000L
+                    lista.filter { it.kupione && it.kupioneOd > 0L && it.kupioneOd <= limit }.forEach { produkt ->
+                        db.collection("shoppingLists").document(produkt.id).delete()
+                    }
+                }
+            }
+            // Sprawdzamy co sekundę, aby działały również bardzo krótkie czasy, np. 5 sekund.
+            delay(1_000L)
+        }
+    }
+
     DisposableEffect(zalogowany, effectiveOwnerId) {
-        if (!zalogowany || effectiveOwnerId.isEmpty()) { 
+        if (!zalogowany || effectiveOwnerId.isEmpty()) {
             lista.clear()
-            onDispose {} 
+            onDispose {}
         } else {
             val currentUid = auth.currentUser?.uid ?: ""
             val mode = if (sharedOwnerId.isEmpty()) "TRYB WŁAŚCICIELA" else "TRYB UDOSTĘPNIONEJ LISTY"
             android.util.Log.d("PRODUCT_DEBUG", "Pobieranie produktów: currentUid=$currentUid, sharedOwnerId=$sharedOwnerId, queryOwnerUid=$effectiveOwnerId, $mode")
-            
+
             var initial = true
             val reg = db.collection("shoppingLists").whereEqualTo("userId", effectiveOwnerId).addSnapshotListener { res, err ->
                 if (err != null) {
@@ -392,9 +448,9 @@ fun LoginScreen(modifier: Modifier, onThemeChanged: (String) -> Unit, onHapticsC
                     return@addSnapshotListener
                 }
                 if (res == null) return@addSnapshotListener
-                
+
                 android.util.Log.d("PRODUCT_DEBUG", "Pobrano produkty: liczba znalezionych produktów=${res.size()}")
-                
+
                 if (!initial) res.documentChanges.forEach { c ->
                     val p = c.document.toObject(Produkt::class.java).copy(id = c.document.id)
                     if (p.dodal != currentImie) when(c.type) {
@@ -412,14 +468,14 @@ fun LoginScreen(modifier: Modifier, onThemeChanged: (String) -> Unit, onHapticsC
     }
 
     DisposableEffect(zalogowany, effectiveOwnerId) {
-        if (!zalogowany || effectiveOwnerId.isEmpty()) { 
+        if (!zalogowany || effectiveOwnerId.isEmpty()) {
             sklepy.clear()
-            onDispose {} 
+            onDispose {}
         } else {
             val currentUid = auth.currentUser?.uid ?: ""
             val mode = if (sharedOwnerId.isEmpty()) "TRYB WŁAŚCICIELA" else "TRYB UDOSTĘPNIONEJ LISTY"
             android.util.Log.d("STORE_DEBUG", "Pobieranie sklepów: currentUid=$currentUid, sharedOwnerId=$sharedOwnerId, queryOwnerUid=$effectiveOwnerId, $mode")
-            
+
             val reg = db.collection("sklepy").whereEqualTo("userId", effectiveOwnerId).addSnapshotListener { res, err ->
                 if (err != null) {
                     android.util.Log.e("STORE_DEBUG", "Błąd pobierania sklepów", err)
@@ -456,8 +512,14 @@ fun LoginScreen(modifier: Modifier, onThemeChanged: (String) -> Unit, onHapticsC
         var trw by remember { mutableStateOf(false) }; var err by remember { mutableStateOf<String?>(null) }
         var rImie by remember { mutableStateOf("") }; var rLog by remember { mutableStateOf("") }; var rMail by remember { mutableStateOf("") }; var rPass by remember { mutableStateOf("") }
         var passVisible by remember { mutableStateOf(false) }
-        
-        Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .padding(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
             Card(shape = RoundedCornerShape(28.dp), elevation = CardDefaults.cardElevation(6.dp)) {
                 Column(Modifier.padding(24.dp).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("🛒", style = MaterialTheme.typography.displaySmall)
@@ -468,9 +530,9 @@ fun LoginScreen(modifier: Modifier, onThemeChanged: (String) -> Unit, onHapticsC
                         OutlinedTextField(value = rLog, onValueChange = { rLog = it }, label = { Text("Login") }, modifier = Modifier.fillMaxWidth())
                         OutlinedTextField(value = rMail, onValueChange = { rMail = it }, label = { Text("E-mail") }, modifier = Modifier.fillMaxWidth())
                         OutlinedTextField(
-                            value = rPass, 
-                            onValueChange = { rPass = it }, 
-                            label = { Text("Hasło") }, 
+                            value = rPass,
+                            onValueChange = { rPass = it },
+                            label = { Text("Hasło") },
                             visualTransformation = if (passVisible) VisualTransformation.None else PasswordVisualTransformation(),
                             trailingIcon = {
                                 IconButton(onClick = { passVisible = !passVisible }) {
@@ -482,9 +544,9 @@ fun LoginScreen(modifier: Modifier, onThemeChanged: (String) -> Unit, onHapticsC
                     } else {
                         OutlinedTextField(value = login, onValueChange = { login = it }, label = { Text("Login") }, modifier = Modifier.fillMaxWidth())
                         OutlinedTextField(
-                            value = pin, 
-                            onValueChange = { pin = it }, 
-                            label = { Text("Hasło") }, 
+                            value = pin,
+                            onValueChange = { pin = it },
+                            label = { Text("Hasło") },
                             visualTransformation = if (passVisible) VisualTransformation.None else PasswordVisualTransformation(),
                             trailingIcon = {
                                 IconButton(onClick = { passVisible = !passVisible }) {
@@ -509,7 +571,11 @@ fun LoginScreen(modifier: Modifier, onThemeChanged: (String) -> Unit, onHapticsC
                                                 trw = false; Toast.makeText(ctx, "Link do resetu wysłany na e-mail", Toast.LENGTH_LONG).show()
                                             }.addOnFailureListener { trw = false; err = "Błąd wysyłania" }
                                         }
-                                    }.addOnFailureListener { trw = false; err = "Błąd bazy" }
+                                    }.addOnFailureListener { e ->
+                                        trw = false
+                                        err = "Błąd bazy: ${e.message ?: "nieznany błąd"}"
+                                        android.util.Log.e("FIRESTORE_LOGIN", "Błąd loginLookup/$cleanLogin", e)
+                                    }
                                 }
                             ) {
                                 Text("Zapomniałeś hasła?", style = MaterialTheme.typography.bodySmall)
@@ -525,9 +591,32 @@ fun LoginScreen(modifier: Modifier, onThemeChanged: (String) -> Unit, onHapticsC
                                 else auth.createUserWithEmailAndPassword(rMail, rPass).addOnSuccessListener { res ->
                                     val uid = res.user!!.uid
                                     val data = mapOf("uid" to uid, "imie" to rImie, "login" to rLog, "email" to rMail, "sharedOwnerId" to "", "sharedOwnerName" to "")
-                                    db.collection("users").document(uid).set(data).addOnSuccessListener {
-                                        db.collection("loginLookup").document(rLog).set(mapOf("uid" to uid, "email" to rMail)).addOnSuccessListener { zalogowany = true }
-                                    }
+                                    db.collection("users").document(uid)
+                                        .set(data)
+                                        .addOnSuccessListener {
+                                            db.collection("loginLookup")
+                                                .document(rLog.trim().lowercase())
+                                                .set(
+                                                    mapOf(
+                                                        "uid" to uid,
+                                                        "email" to rMail.trim().lowercase()
+                                                    )
+                                                )
+                                                .addOnSuccessListener {
+                                                    trw = false
+                                                    zalogowany = true
+                                                }
+                                                .addOnFailureListener { e ->
+                                                    trw = false
+                                                    err = "Błąd zapisu loginu: ${e.message ?: "nieznany błąd"}"
+                                                    android.util.Log.e("FIRESTORE_REGISTER_LOGIN", "Błąd loginLookup", e)
+                                                }
+                                        }
+                                        .addOnFailureListener { e ->
+                                            trw = false
+                                            err = "Błąd zapisu konta: ${e.message ?: "nieznany błąd"}"
+                                            android.util.Log.e("FIRESTORE_REGISTER_USER", "Błąd users/$uid", e)
+                                        }
                                 }.addOnFailureListener { trw = false; err = it.message }
                             }
                         } else {
@@ -540,7 +629,11 @@ fun LoginScreen(modifier: Modifier, onThemeChanged: (String) -> Unit, onHapticsC
                                     if (email.isEmpty()) { trw = false; err = "Błąd konta" }
                                     else auth.signInWithEmailAndPassword(email, pin).addOnSuccessListener { zalogowany = true }.addOnFailureListener { trw = false; err = "Błędne dane" }
                                 }
-                            }.addOnFailureListener { trw = false; err = "Błąd bazy" }
+                            }.addOnFailureListener { e ->
+                                trw = false
+                                err = "Błąd bazy: ${e.message ?: "nieznany błąd"}"
+                                android.util.Log.e("FIRESTORE_RESET", "Błąd loginLookup/$cleanLogin", e)
+                            }
                         }
                     }, modifier = Modifier.fillMaxWidth()) { if(trw) CircularProgressIndicator(Modifier.size(20.dp)) else Text(if(isReg) "Utwórz konto" else "Zaloguj się") }
                     TextButton(
@@ -554,85 +647,116 @@ fun LoginScreen(modifier: Modifier, onThemeChanged: (String) -> Unit, onHapticsC
     }
 
     Box(modifier.fillMaxSize()) {
-        AnimatedContent(targetState = wybranaZakladka, label = "tabs") { zak ->
-            when(zak) {
-                0 -> Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(start = 24.dp, top = 24.dp, end = 24.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(text = "🛒 Lista zakupów", style = MaterialTheme.typography.titleMedium)
-                    }
-                    UserHeader(imie, lista.size) { auth.signOut(); zalogowany = false; prefs.edit { clear() } }
-                    var nPr by remember { mutableStateOf("") }
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
-                            value = nPr,
-                            onValueChange = { nPr = it },
-                            label = { Text("🛍️ Produkt") },
-                            modifier = Modifier.weight(1f).height(64.dp),
-                            singleLine = true,
-                            shape = RoundedCornerShape(18.dp)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Button(
-                            modifier = Modifier.height(64.dp),
-                            shape = RoundedCornerShape(18.dp),
-                            onClick = {
-                                if(nPr.isNotBlank()) {
-                                    if (wybranaKategoria != "wszystkie") {
-                                        dodajProduktDoListy(ctx, nPr, imie, wybranaKategoria)
-                                        nPr = ""
-                                    } else {
-                                        nowyProduktDlaDialogu = nPr
-                                        pokazWyborListy = true
-                                    }
+        // Zawartość znajduje się pod dolnym paskiem.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .offset(y = (-12).dp)
+                .clipToBounds()
+                .zIndex(0f)
+        ) {
+            AnimatedContent(targetState = wybranaZakladka, label = "tabs") { zak ->
+                when(zak) {
+                    0 -> Column(
+                        Modifier
+                            .fillMaxSize()
+                            .offset(y = (-29).dp)
+                            .background(MaterialTheme.colorScheme.background)
+                            .padding(start = 24.dp, top = 24.dp, end = 24.dp, bottom = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        var pokazGorneMenu by remember { mutableStateOf(true) }
+                        if (pokazGorneMenu) {
+                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text(text = "🛒 Lista zakupów", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                                IconButton(onClick = { pokazGorneMenu = false }) {
+                                    Text("✓", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
                                 }
                             }
-                        ) { Text("＋") }
-                    }
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
-                            value = wyszukiwanieProduktu,
-                            onValueChange = { wyszukiwanieProduktu = it },
-                            label = { Text("🔍 Szukaj...") },
-                            modifier = Modifier.weight(1f).height(60.dp),
-                            singleLine = true,
-                            shape = RoundedCornerShape(16.dp),
-                            textStyle = MaterialTheme.typography.bodyMedium
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Button(
-                            onClick = { pokazDialogSortowania = true },
-                            modifier = Modifier.height(60.dp),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        ) {
-                            Text("⋮", style = MaterialTheme.typography.titleLarge)
+                            UserHeader(imie, lista.size) { auth.signOut(); zalogowany = false; prefs.edit { clear() } }
+                        } else {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text("Dodawanie produktów", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                IconButton(onClick = { pokazGorneMenu = true }) {
+                                    Text("⌄", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+                                }
+                            }
+                        }
+                        var nPr by remember { mutableStateOf("") }
+                        if (pokazGorneMenu) {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                OutlinedTextField(
+                                    value = nPr,
+                                    onValueChange = { nPr = it },
+                                    label = { Text("🛍️ Produkt") },
+                                    modifier = Modifier.weight(1f).height(64.dp),
+                                    singleLine = true,
+                                    shape = RoundedCornerShape(18.dp)
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Button(
+                                    modifier = Modifier.height(64.dp),
+                                    shape = RoundedCornerShape(18.dp),
+                                    onClick = {
+                                        if(nPr.isNotBlank()) {
+                                            if (wybranaKategoria != "wszystkie") {
+                                                dodajProduktDoListy(ctx, nPr, imie, wybranaKategoria)
+                                                nPr = ""
+                                            } else {
+                                                nowyProduktDlaDialogu = nPr
+                                                pokazWyborListy = true
+                                            }
+                                        }
+                                    }
+                                ) { Text("＋") }
+                            }
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                OutlinedTextField(
+                                    value = wyszukiwanieProduktu,
+                                    onValueChange = { wyszukiwanieProduktu = it },
+                                    label = { Text("🔍 Szukaj...") },
+                                    modifier = Modifier.weight(1f).height(60.dp),
+                                    singleLine = true,
+                                    shape = RoundedCornerShape(16.dp),
+                                    textStyle = MaterialTheme.typography.bodyMedium
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Button(
+                                    onClick = { pokazDialogSortowania = true },
+                                    modifier = Modifier.height(60.dp),
+                                    shape = RoundedCornerShape(16.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                ) {
+                                    Text("⋮", style = MaterialTheme.typography.titleLarge)
+                                }
+                            }
+                            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                FilterButton("Wszystkie", wybranaKategoria == "wszystkie") { wybranaKategoria = "wszystkie" }
+                                sklepy.forEach { s -> FilterButton("${s.emoji} ${s.nazwa}", wybranaKategoria == s.id) { wybranaKategoria = s.id } }
+                            }
+                        }
+                        Box(modifier = Modifier.weight(1f)) {
+                            if(posortowanaListaLocal.isEmpty()) Box(Modifier.fillMaxSize(), Alignment.BottomCenter) { EmptyShoppingImage() }
+                            else ProductDragList(posortowanaListaLocal, trybSortowania == "reczna", { f, t -> val itm = posortowanaListaLocal.removeAt(f); posortowanaListaLocal.add(t, itm) }, { zapiszNowaKolejnosc(posortowanaListaLocal) }, { p, c -> db.collection("shoppingLists").document(p.id).update(mapOf("kupione" to c, "kupioneOd" to if(c) System.currentTimeMillis() else 0L)) }, { pUsun = it }, { pEdytuj = it }, sklepy, { pSklep = it })
                         }
                     }
-                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        FilterButton("Wszystkie", wybranaKategoria == "wszystkie") { wybranaKategoria = "wszystkie" }
-                        sklepy.forEach { s -> FilterButton("${s.emoji} ${s.nazwa}", wybranaKategoria == s.id) { wybranaKategoria = s.id } }
-                    }
-                    Box(modifier = Modifier.weight(1f)) {
-                        if(posortowanaListaLocal.isEmpty()) Box(Modifier.fillMaxSize(), Alignment.BottomCenter) { EmptyShoppingImage() }
-                        else ProductDragList(posortowanaListaLocal, trybSortowania == "reczna", { f, t -> val itm = posortowanaListaLocal.removeAt(f); posortowanaListaLocal.add(t, itm) }, { zapiszNowaKolejnosc(posortowanaListaLocal) }, { p, c -> db.collection("shoppingLists").document(p.id).update(mapOf("kupione" to c, "kupioneOd" to if(c) System.currentTimeMillis() else 0L)) }, { pUsun = it }, { pEdytuj = it }, sklepy, { pSklep = it })
-                    }
+                    1 -> if(wybranySklep == null) SklepyScreen(posortowaneSklepyLocal, { wybranySklep = it }, { pDodajSklep = true }, { sEdytuj = it }, { sUsun = it }, { przeciaganieSklepu = true }, { przeciaganieSklepu = false; zapiszNowaKolejnoscSklepow(posortowaneSklepyLocal) }, { f, t -> val itm = posortowaneSklepyLocal.removeAt(f); posortowaneSklepyLocal.add(t, itm) })
+                    else ListaSklepuScreen(wybranySklep!!, sklepy.find { it.id == wybranySklep }, lista, imie, { wybranySklep = null }, { pUsun = it }, { pEdytuj = it }, { pSklep = it })
+                    2 -> UstawieniaScreen(
+                        emailKonta,
+                        { emailKonta = it },
+                        onThemeChanged,
+                        onHapticsChanged,
+                        { pokazWspoldzielenie = true },
+                        { auth.signOut(); zalogowany = false; prefs.edit { clear() } },
+                        onSortChanged = { trybSortowania = it }
+                    )
                 }
-                1 -> if(wybranySklep == null) SklepyScreen(posortowaneSklepyLocal, { wybranySklep = it }, { pDodajSklep = true }, { sEdytuj = it }, { sUsun = it }, { przeciaganieSklepu = true }, { przeciaganieSklepu = false; zapiszNowaKolejnoscSklepow(posortowaneSklepyLocal) }, { f, t -> val itm = posortowaneSklepyLocal.removeAt(f); posortowaneSklepyLocal.add(t, itm) })
-                else ListaSklepuScreen(wybranySklep!!, sklepy.find { it.id == wybranySklep }, lista, imie, { wybranySklep = null }, { pUsun = it }, { pEdytuj = it }, { pSklep = it })
-                2 -> UstawieniaScreen(
-                    emailKonta, 
-                    { emailKonta = it }, 
-                    onThemeChanged, 
-                    onHapticsChanged, 
-                    { pokazWspoldzielenie = true }, 
-                    { auth.signOut(); zalogowany = false; prefs.edit { clear() } }, 
-                    onSortChanged = { trybSortowania = it }
-                )
-            }
-        }
+            }        }
+
 
         if (pokazWyborListy) {
             AlertDialog(
@@ -715,7 +839,13 @@ fun LoginScreen(modifier: Modifier, onThemeChanged: (String) -> Unit, onHapticsC
         )
         if (pokazDialogSortowania) ChoiceDialog("Sortowanie", listOf("reczna" to "Ręczna", "az" to "A-Z", "za" to "Z-A", "dokupienia" to "Do kupienia", "kupione" to "Kupione"), trybSortowania, { trybSortowania = it; pokazDialogSortowania = false }, { pokazDialogSortowania = false })
 
-        Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 8.dp).align(Alignment.BottomCenter), shape = RoundedCornerShape(28.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), elevation = CardDefaults.cardElevation(8.dp)) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp)
+                .align(Alignment.BottomCenter)
+                .offset(y = 10.dp)
+                .zIndex(10f), shape = RoundedCornerShape(28.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), elevation = CardDefaults.cardElevation(8.dp)) {
             Row(modifier = Modifier.fillMaxWidth().padding(8.dp), Arrangement.SpaceEvenly, Alignment.CenterVertically) {
                 DolnaNawigacjaItem("🛒", "Lista", wybranaZakladka == 0) { wybranaZakladka = 0 }
                 DolnaNawigacjaItem("🏪", "Sklepy", wybranaZakladka == 1) { wybranaZakladka = 1 }
@@ -1001,7 +1131,10 @@ fun UstawieniaScreen(currentEmail: String, onEmailChanged: (String) -> Unit, onT
     val context = LocalContext.current
     val prefs = remember { settingsPrefs(context) }
     var autoDelete by remember { mutableStateOf(prefs.getBoolean(KEY_AUTO_DELETE, true)) }
-    var deleteMinutes by remember { mutableIntStateOf(prefs.getInt(KEY_DELETE_MINUTES, 20)) }
+    var deleteSeconds by remember { mutableIntStateOf(
+        if (prefs.contains(KEY_DELETE_SECONDS)) prefs.getInt(KEY_DELETE_SECONDS, 1200)
+        else (prefs.getInt(KEY_DELETE_MINUTES, 20).coerceAtLeast(1) * 60)
+    ) }
     var theme by remember { mutableStateOf(prefs.getString(KEY_THEME, "system") ?: "system") }
     var defaultSort by remember { mutableStateOf(prefs.getString(KEY_DEFAULT_SORT, "reczna") ?: "reczna") }
     var haptics by remember { mutableStateOf(prefs.getBoolean(KEY_HAPTICS, true)) }
@@ -1038,7 +1171,7 @@ fun UstawieniaScreen(currentEmail: String, onEmailChanged: (String) -> Unit, onT
         SettingsSectionTitle("🛒 Lista zakupów")
         SettingsCard {
             SettingsSwitchRow("Auto-usuwanie", if(autoDelete)"Włączone" else "Wyłączone", autoDelete) { autoDelete = it; saveBoolean(KEY_AUTO_DELETE, it) }
-            HorizontalDivider(); SettingsRow("Czas usunięcia", "$deleteMinutes min", "›", enabled = autoDelete, onClick = { if(autoDelete) dialog = "delete_time" })
+            HorizontalDivider(); SettingsRow("Czas usunięcia", formatDeleteTime(deleteSeconds), "›", enabled = autoDelete, onClick = { if(autoDelete) dialog = "delete_time" })
             HorizontalDivider(); SettingsRow("Sortowanie", when(defaultSort){"az"->"A-Z";"za"->"Z-A";"dokupienia"->"Do kupienia";"kupione"->"Kupione";else->"Ręczna"}, "›", onClick = { dialog = "sort" })
         }
         SettingsSectionTitle("🔔 Powiadomienia")
@@ -1051,20 +1184,20 @@ fun UstawieniaScreen(currentEmail: String, onEmailChanged: (String) -> Unit, onT
             SettingsSwitchRow("Wibracje", if(haptics)"Włączone" else "Wyłączone", haptics) { haptics = it; saveBoolean(KEY_HAPTICS, it); onHapticsChanged(it) }
             HorizontalDivider(); SettingsRow("Informacje", "Wersja ${BuildConfig.VERSION_NAME}", "›", onClick = { dialog = "about" })
             HorizontalDivider(); SettingsRow("Aktualizacja", if(checkingUpdate) "Sprawdzanie..." else "Sprawdź wersję", "↻", onClick = {
-                if(!checkingUpdate) {
-                    checkingUpdate = true
-                    checkGitHubLatestRelease { r ->
-                        checkingUpdate = false
-                        if(r != null) {
-                            updateInfo = r
-                            dialog = "update_status"
-                        } else {
-                            komunikatEmail = "Nie udało się sprawdzić aktualizacji."
-                            dialog = "error_info"
-                        }
+            if(!checkingUpdate) {
+                checkingUpdate = true
+                checkGitHubLatestRelease { r ->
+                    checkingUpdate = false
+                    if(r != null) {
+                        updateInfo = r
+                        dialog = "update_status"
+                    } else {
+                        komunikatEmail = "Nie udało się sprawdzić aktualizacji."
+                        dialog = "error_info"
                     }
                 }
-            })
+            }
+        })
         }
         SettingsSectionTitle("☕ Wesprzyj projekt")
         SettingsCard {
@@ -1083,13 +1216,73 @@ fun UstawieniaScreen(currentEmail: String, onEmailChanged: (String) -> Unit, onT
                 }
             }
         }
-        TextButton(modifier = Modifier.fillMaxWidth(), onClick = { prefs.edit { clear() }; autoDelete = true; deleteMinutes = 20; theme = "system"; defaultSort = "reczna"; haptics = true; notifUpdates = true; notifChanges = true; onHapticsChanged(true); onThemeChanged("system") }) { Text("Domyślne") }
+        TextButton(modifier = Modifier.fillMaxWidth(), onClick = { prefs.edit { clear() }; autoDelete = true; deleteSeconds = 1200; saveInt(KEY_DELETE_SECONDS, 1200); theme = "system"; defaultSort = "reczna"; haptics = true; notifUpdates = true; notifChanges = true; onHapticsChanged(true); onThemeChanged("system") }) { Text("Domyślne") }
     }
 
     if (dialog != null) {
         when (dialog) {
             "theme" -> ChoiceDialog("Motyw", listOf("system" to "Systemowy", "light" to "Jasny", "dark" to "Ciemny"), theme, { theme = it; saveString(KEY_THEME, it); onThemeChanged(it); dialog = null }, { dialog = null })
-            "delete_time" -> ChoiceDialog("Czas", listOf("5" to "5 min", "10" to "10 min", "20" to "20 min", "30" to "30 min", "60" to "60 min"), deleteMinutes.toString(), { deleteMinutes = it.toInt(); saveInt(KEY_DELETE_MINUTES, deleteMinutes); dialog = null }, { dialog = null })
+            "delete_time" -> ChoiceDialog("Czas usunięcia", listOf(
+                "5" to "5 sekund",
+                "10" to "10 sekund",
+                "30" to "30 sekund",
+                "60" to "1 minuta",
+                "300" to "5 minut",
+                "600" to "10 minut",
+                "1200" to "20 minut",
+                "1800" to "30 minut",
+                "3600" to "1 godzina",
+                "custom" to "✏️ Własny czas..."
+            ), deleteSeconds.toString(), { value ->
+                if (value == "custom") {
+                    dialog = "delete_custom"
+                } else {
+                    deleteSeconds = value.toInt()
+                    saveInt(KEY_DELETE_SECONDS, deleteSeconds)
+                    dialog = null
+                }
+            }, { dialog = null })
+            "delete_custom" -> {
+                var customSeconds by remember(dialog) { mutableStateOf(deleteSeconds.toString()) }
+                var customError by remember(dialog) { mutableStateOf<String?>(null) }
+                AlertDialog(
+                    onDismissRequest = { dialog = null },
+                    title = { Text("⏱️ Własny czas usunięcia") },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = customSeconds,
+                                onValueChange = {
+                                    if (it.all(Char::isDigit) && it.length <= 7) {
+                                        customSeconds = it
+                                        customError = null
+                                    }
+                                },
+                                label = { Text("Liczba sekund") },
+                                suffix = { Text("s") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Text("Możesz ustawić od 1 sekundy do 7 dni (604800 s). Np. 5 = usuń po 5 sekundach.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            customError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            val seconds = customSeconds.toIntOrNull()
+                            if (seconds == null || seconds !in 1..604800) {
+                                customError = "Podaj wartość od 1 do 604800 sekund."
+                            } else {
+                                deleteSeconds = seconds
+                                saveInt(KEY_DELETE_SECONDS, seconds)
+                                dialog = null
+                            }
+                        }) { Text("ZAPISZ") }
+                    },
+                    dismissButton = { TextButton(onClick = { dialog = null }) { Text("ANULUJ") } }
+                )
+            }
             "sort" -> ChoiceDialog("Sortowanie", listOf("reczna" to "Ręczna", "az" to "A-Z", "za" to "Z-A", "dokupienia" to "Do kupienia", "kupione" to "Kupione"), defaultSort, { defaultSort = it; saveString(KEY_DEFAULT_SORT, it); onSortChanged(it); dialog = null }, { dialog = null })
             "email" -> AlertDialog(onDismissRequest = { if (!emailTrwa) dialog = null }, title = { Text("E-mail") }, text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1106,7 +1299,7 @@ fun UstawieniaScreen(currentEmail: String, onEmailChanged: (String) -> Unit, onT
             "email_reset_info" -> AlertDialog(onDismissRequest = { dialog = null }, title = { Text("Hasło") }, text = { Text("Wyloguj się i użyj opcji resetowania hasła.") }, confirmButton = { TextButton(onClick = { dialog = null }) { Text("OK") } })
             "about" -> AlertDialog(onDismissRequest = { dialog = null }, title = { Text("O aplikacji") }, text = { Text("Wersja ${BuildConfig.VERSION_NAME}\nFirebase Firestore") }, confirmButton = { TextButton(onClick = { dialog = null }) { Text("OK") } })
             "update_status" -> {
-                val isNew = (updateInfo?.versionCode ?: 0) > BuildConfig.VERSION_CODE
+                val isNew = updateInfo?.let { isReleaseNewer(it) } == true
                 AlertDialog(
                     onDismissRequest = { dialog = null },
                     title = { Text("Aktualizacja") },
@@ -1172,12 +1365,12 @@ fun ZarzadzajDostepemDialog(uid: String, onDismiss: () -> Unit) {
                             IconButton(onClick = {
                                 // 1. Usuń z listy właściciela
                                 db.collection("users").document(uid).update("sharedWithNames.$kod", FieldValue.delete())
-                                
-                    // 2. Usuń samo zaproszenie (Gość sam to wykryje przez listener)
-                                    db.collection("invitations").document(kod).delete().addOnSuccessListener {
-                                        // 3. Odśwież lokalną listę w oknie właściciela
-                                        osoby = osoby.filterKeys { it != kod }
-                                    }
+
+                                // 2. Usuń samo zaproszenie (Gość sam to wykryje przez listener)
+                                db.collection("invitations").document(kod).delete().addOnSuccessListener {
+                                    // 3. Odśwież lokalną listę w oknie właściciela
+                                    osoby = osoby.filterKeys { it != kod }
+                                }
                             }) { Text("🗑️") }
                         }
                     }
@@ -1215,12 +1408,20 @@ fun ZarzadzajDostepemDialog(uid: String, onDismiss: () -> Unit) {
 private const val PREFS_SETTINGS = "lista_zakupow_settings"
 private const val KEY_AUTO_DELETE = "auto_delete"
 private const val KEY_DELETE_MINUTES = "delete_minutes"
+private const val KEY_DELETE_SECONDS = "delete_seconds"
 private const val KEY_THEME = "theme"
 private const val KEY_DEFAULT_SORT = "default_sort"
 private const val KEY_CONFIRM_DELETE = "confirm_delete"
 private const val KEY_HAPTICS = "haptics"
 private const val KEY_NOTIF_UPDATES = "notif_updates"
 private const val KEY_NOTIF_CHANGES = "notif_changes"
+private fun formatDeleteTime(seconds: Int): String = when {
+    seconds < 60 -> "$seconds s"
+    seconds % 3600 == 0 -> "${seconds / 3600} godz."
+    seconds % 60 == 0 -> "${seconds / 60} min"
+    else -> "${seconds}s"
+}
+
 private fun settingsPrefs(c: Context) = c.getSharedPreferences(PREFS_SETTINGS, Context.MODE_PRIVATE)
 
 fun dodajProduktDoListy(ctx: Context, nazwa: String, imie: String, kategoria: String) {
