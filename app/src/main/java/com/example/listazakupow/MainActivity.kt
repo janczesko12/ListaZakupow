@@ -102,7 +102,7 @@ private const val CHANNEL_UPDATES = "updates"
 private const val CHANNEL_ACTIVITY = "list_activity"
 private const val INVITE_VALIDITY_MS = 24L * 60L * 60L * 1000L
 private const val INVITE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-private const val INVITE_BASE_URL = "https://mythoria.pl/invite"
+private const val INVITE_BASE_URL = "https://www.novydev.pl/invite"
 
 private data class GitHubRelease(val versionCode: Int?, val versionName: String, val downloadUrl: String?)
 
@@ -140,7 +140,11 @@ private fun inviteUri(code: String): Uri = "$INVITE_BASE_URL/$code".toUri()
 
 private fun extractInviteId(uri: Uri?): String? {
     if (uri == null) return null
-    return if (uri.host == "mythoria.pl" && uri.pathSegments.firstOrNull() == "invite") uri.pathSegments.getOrNull(1)
+    val host = uri.host?.lowercase()
+    return if (
+        host in setOf("www.novydev.pl", "novydev.pl", "mythoria.pl", "www.mythoria.pl") &&
+        uri.pathSegments.firstOrNull() == "invite"
+    ) uri.pathSegments.getOrNull(1)
     else if (uri.scheme == "listazakupow") uri.pathSegments.firstOrNull() else null
 }
 
