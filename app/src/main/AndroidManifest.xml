@@ -49,8 +49,21 @@
                     android:host="invite" />
             </intent-filter>
 
-            <!-- Android App Links: https://mythoria.pl/invite/<ID> -->
+            <!-- Główne Android App Links: https://www.novydev.pl/invite/<ID> -->
             <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data
+                    android:scheme="https"
+                    android:host="www.novydev.pl"
+                    android:pathPrefix="/invite" />
+            </intent-filter>
+
+            <!-- Stara domena: obsługa wcześniej wysłanych linków podczas migracji -->
+            <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
 
                 <category android:name="android.intent.category.DEFAULT" />
