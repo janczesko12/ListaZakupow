@@ -142,7 +142,7 @@ private fun extractInviteId(uri: Uri?): String? {
     if (uri == null) return null
     val host = uri.host?.lowercase()
     return if (
-        host in setOf("www.novydev.pl", "novydev.pl", "mythoria.pl", "www.mythoria.pl") &&
+        host in setOf("www.novydev.pl", "novydev.pl") &&
         uri.pathSegments.firstOrNull() == "invite"
     ) uri.pathSegments.getOrNull(1)
     else if (uri.scheme == "listazakupow") uri.pathSegments.firstOrNull() else null
@@ -348,23 +348,35 @@ fun LoginScreen(modifier: Modifier, onThemeChanged: (String) -> Unit, onHapticsC
             val reg = db.collection("invitations")
                 .whereEqualTo("ownerUid", sharedOwnerId)
                 .whereEqualTo("acceptedBy", u.uid)
-                .addSnapshotListener { res, _ ->
-                    if (res != null) {
-                        val active = res.documents.any { it.getString("status") == "accepted" }
-                        if (!active) {
-                            // Brak aktywnych zaproszeń od tego konkretnego właściciela -> Czyścimy dostęp
-                            db.collection("users").document(u.uid).update(
-                                "sharedOwnerId", "",
-                                "sharedOwnerName", ""
-                            ).addOnSuccessListener {
-                                // Dodatkowe czyszczenie lokalne na wypadek gdyby users listener był wolny
-                                sharedOwnerId = ""
-                                sharedOwnerName = ""
-                                prefs.edit {
-                                    putString("shared_owner_id", "")
-                                    putString("shared_owner_name", "")
-                                }
+                // INCLUDE pozwala odebrać także potwierdzenie z serwera, gdy wynik jest pusty.
+                .addSnapshotListener(MetadataChanges.INCLUDE) { res, error ->
+                    // Nie zmieniaj dostępu na podstawie cache, błędu ani braku wyniku.
+                    if (error != null || res == null || res.metadata.isFromCache) {
+                        return@addSnapshotListener
+                    }
+
+                    val active = res.documents.any {
+                        it.getString("status") == "accepted"
+                    }
+
+                    if (!active) {
+                        // Czyścimy dostęp dopiero po potwierdzeniu pustego wyniku przez serwer.
+                        db.collection("users").document(u.uid).update(
+                            "sharedOwnerId", "",
+                            "sharedOwnerName", ""
+                        ).addOnSuccessListener {
+                            sharedOwnerId = ""
+                            sharedOwnerName = ""
+                            prefs.edit {
+                                putString("shared_owner_id", "")
+                                putString("shared_owner_name", "")
                             }
+                        }.addOnFailureListener { e ->
+                            android.util.Log.e(
+                                "SHARING_ACCESS",
+                                "Nie udało się wyczyścić dostępu do współdzielonej listy.",
+                                e
+                            )
                         }
                     }
                 }
